@@ -1,7 +1,7 @@
 ---
 id: PRD-0002
 title: The whatwhy CLI package
-status: approved
+status: shipped
 date: "2026-11-21"
 ---
 
