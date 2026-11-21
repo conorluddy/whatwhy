@@ -1,7 +1,7 @@
 ---
 id: PRD-0003
 title: Adopting whatwhy where ADRs already exist
-status: approved
+status: shipped
 date: "2026-11-21"
 ---
 
