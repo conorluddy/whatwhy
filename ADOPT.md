@@ -1,7 +1,8 @@
 # Adopting the whatwhy template
 
 First-time setup for a repository created from the whatwhy template. (To add
-whatwhy to a repository that already exists, run `npx whatwhy init` instead.) An agent can do this
+whatwhy to a repository that already exists, run `npx whatwhy init` instead,
+and `whatwhy import` if it already has ADRs.) An agent can do this
 with the human, or a human can do it by hand in about ten minutes. When it is
 done, this file is gone and the repository describes your product instead of
 whatwhy.
@@ -34,7 +35,7 @@ Get these from the human. Do not invent them.
 
 | File | Why |
 | --- | --- |
-| `docs/adr/0001` to `0008`, `docs/prd/0002-whatwhy-cli.md` | They record the process and the tool you have inherited. The ADRs are frozen; your first decision is ADR-0009. If you disagree with one, supersede it. |
+| `docs/adr/0001` to `0010`, `docs/prd/0002` and `0003` | They record the process and the tool you have inherited. The ADRs are frozen; your first decision is ADR-0011. If you disagree with one, supersede it. |
 | `scripts/whatwhy.mjs`, `.githooks/`, the rest of `.github/` | The enforcement. |
 | `docs/*/TEMPLATE.md`, `CLAUDE.md` | Used as they are. |
 | The rest of `AGENTS.md` | The process, written for any project. |

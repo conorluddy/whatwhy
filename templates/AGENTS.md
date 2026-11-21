@@ -48,7 +48,9 @@ satisfy the check.
 ## The check
 
 `whatwhy check` runs on every pull request, and on every commit once the hook
-is on. `whatwhy doctor` says whether it is, and what else is not wired up.
+is on. The hook prints errors only, so run `whatwhy check` yourself to see
+warnings before the pull request does. `whatwhy doctor` says whether the hook
+is on, and what else is not wired up.
 
 | Rule | Requires | Default |
 | --- | --- | --- |
@@ -69,6 +71,5 @@ Every command takes `--json` and returns `{ data, changes[], warnings[] }`, or
 ## Conventions
 
 - Never commit to `main`. Branch, then open a pull request.
-- This file stays under 100 lines. Detail belongs in a PRD or ADR.
 
 <!-- whatwhy:end -->

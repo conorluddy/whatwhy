@@ -12,7 +12,7 @@ import { basename, dirname, isAbsolute, join, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.2.0'
 
 const USAGE = `whatwhy ${VERSION}: PRDs say what, ADRs say why.
 
@@ -28,10 +28,12 @@ Read
   show <ID> [--section <name>]           a document, or one section of it
 Enforce
   check [--fix] [--base <ref>] [--message-file <path>]     apply the rules; --fix repairs what is mechanical
+        [--errors-only]                                    leave out warnings, as the commit hook does
   index                                  regenerate the indexes
 Setup
   init [--name <name>] [--description <text>]              add the process to this repository
        [--adr-dir <path>] [--prd-dir <path>]               where documents live, when not docs/adr and docs/prd
+  import                                 convert ADRs written before whatwhy, in place
   upgrade                                refresh the script, templates and AGENTS.md process section
   doctor                                 report wiring problems
 
@@ -82,6 +84,7 @@ const DOCUMENT_FILE_NAME = /^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/
 const NON_DOCUMENT_FILE_NAMES = ['INDEX.md', 'TEMPLATE.md', 'README.md']
 const SPEC_REFERENCE = /\b(adr|prd)[- ](\d{4})\b/gi // "ADR-0006" or "ADR 0006"
 const DECISIONS_FOLDER_NAME = /(?:^|[-_])(?:adrs?|decisions?)$/i
+const LEGACY_METADATA_LINE = /^(?:[-*] )?\**(status|date|superseded[ -]by)\**:\**\s*(.*?)\s*$/i // "Status: accepted", "**Date:** 2026-01-01"
 const REFERENCE_KEYS = ['prd', 'supersedes', 'superseded-by']
 const FIXABLE_CODES = ['stale-index', 'id-mismatch', 'supersede-not-reciprocal']
 const RUN = 'node scripts/whatwhy.mjs'
@@ -194,13 +197,14 @@ export function writeIndexes(repositoryRoot) {
 /** @type {Record<string, { run: (context: CommandContext) => CommandResult, options: string[] }>} */
 const COMMANDS = {
   init: { run: runInit, options: ['name', 'description', 'adr-dir', 'prd-dir', 'dry-run'] },
+  import: { run: runImport, options: ['dry-run'] },
   upgrade: { run: runUpgrade, options: ['dry-run'] },
   new: { run: runNew, options: ['prd', 'supersedes', 'dry-run'] },
   ...Object.fromEntries(Object.keys(TRANSITIONS).map((name) => [name, { run: runTransition, options: ['dry-run'] }])),
   status: { run: runStatus, options: [] },
   list: { run: runList, options: ['status'] },
   show: { run: runShow, options: ['section'] },
-  check: { run: runCheck, options: ['fix', 'base', 'message-file', 'dry-run'] },
+  check: { run: runCheck, options: ['fix', 'base', 'message-file', 'errors-only', 'dry-run'] },
   index: { run: runIndex, options: ['dry-run'] },
   doctor: { run: runDoctor, options: [] },
 }
@@ -241,9 +245,12 @@ function runInit({ repositoryRoot, positionals, values }) {
     changes.push({ action: 'configure', path: '.git/config', summary: `core.hooksPath = ${HOOKS_PATH}` })
     if (!isDryRun) git(repositoryRoot, ['config', 'core.hooksPath', HOOKS_PATH])
   } else if (hooksPath !== HOOKS_PATH) {
-    warnings.push(`git runs hooks from "${hooksPath}", so ${HOOKS_PATH}/commit-msg will not run. Add this line to ${hooksPath}/commit-msg: exec ${RUN} check --message-file "$1"`)
+    warnings.push(`git runs hooks from "${hooksPath}", so ${HOOKS_PATH}/commit-msg will not run. Add this line to ${hooksPath}/commit-msg: exec ${RUN} check --errors-only --message-file "$1"`)
   }
   const lines = changes.length > 0 ? [`whatwhy ${VERSION} is set up. Commit this with "no-spec: adopting whatwhy" and "no-adr: adopting whatwhy" in the message.`, `Then describe the project in AGENTS.md and run \`${RUN} new prd "<title>"\`.`] : ['Already set up. Nothing changed.']
+  if (loadDocuments(repositoryRoot, 'adr', pending).findings.some(({ code }) => code === 'invalid-frontmatter')) {
+    lines.push(`${directories.adr} holds ADRs written before whatwhy. Run \`${RUN} import\` to convert them.`)
+  }
   return result({ version: VERSION, baseBranch: has(CONFIGURATION_PATH) ? loadConfiguration(repositoryRoot).baseBranch : baseBranch, directories }, lines, changes, warnings)
 }
 
@@ -258,7 +265,7 @@ function resolveInitDirectories(repositoryRoot, values, warnings) {
   // Naming the ADR folder is the human's choice made; without it, a second decisions folder would be an accident.
   const otherFolders = flags.adr === undefined ? findDecisionFolders(repositoryRoot).filter((folder) => folder !== directories.adr) : []
   if (otherFolders.length > 0) {
-    throw new CommandError('existing-decisions-found', `This repository already keeps decisions in ${otherFolders.join(' and ')}, and \`init\` would start a second set in ${directories.adr}. Nothing was written. To adopt the existing ones, run \`npx whatwhy init --adr-dir ${otherFolders[0]}\`. To keep them apart on purpose, run \`npx whatwhy init --adr-dir ${directories.adr}\`.`)
+    throw new CommandError('existing-decisions-found', `This repository already keeps decisions in ${otherFolders.join(' and ')}, and \`init\` would start a second set in ${directories.adr}. Nothing was written. To adopt the existing ones, run \`npx whatwhy init --adr-dir ${otherFolders[0]}\` and then \`${RUN} import\`. To keep them apart on purpose, run \`npx whatwhy init --adr-dir ${directories.adr}\`.`)
   }
   return directories
 }
@@ -269,6 +276,113 @@ function findDecisionFolders(repositoryRoot) {
     .filter((path) => /^\d{4}-.*\.md$/.test(basename(path)) && DECISIONS_FOLDER_NAME.test(basename(dirname(path))))
     .map((path) => dirname(path))
   return [...new Set(folders)].sort()
+}
+
+/** Converts the ADRs in the ADR folder that have no frontmatter, where they sit (ADR-0009). @param {CommandContext} context @returns {CommandResult} */
+function runImport({ repositoryRoot, positionals, values }) {
+  if (positionals.length > 0) throw new CommandError('invalid-arguments', '`import` takes no arguments. It converts the ADRs in the folder that `directories.adr` names.')
+  const directory = directoryOf(repositoryRoot, 'adr')
+  const fileNames = existsSync(join(repositoryRoot, directory)) ? readdirSync(join(repositoryRoot, directory)).sort() : []
+  /** @type {PendingWrites} */
+  const pending = new Map()
+  /** @type {{ path: string, reason: string }[]} */
+  const skipped = []
+
+  for (const fileName of fileNames.filter((name) => name.endsWith('.md') && !NON_DOCUMENT_FILE_NAMES.includes(name))) {
+    const path = `${directory}/${fileName}`
+    const text = readText(join(repositoryRoot, path))
+    if (parseDocument(text)) continue // already has frontmatter, which is what makes `import` repeatable
+    const number = DOCUMENT_FILE_NAME.exec(fileName)?.[1]
+    const dateAdded = () => lines(git(repositoryRoot, ['log', '--diff-filter=A', '--follow', '--format=%ad', '--date=short', '--', path])).at(-1) ?? null
+    const conversion = number ? convertLegacyAdr(text, number, dateAdded) : { reason: 'The filename is not NNNN-kebab-case-title.md. Rename it first, e.g. 0004-use-sqlite.md.' }
+    if ('reason' in conversion) skipped.push({ path, reason: conversion.reason })
+    else pending.set(path, { text: conversion.text, summary: `ADR-${number} imported as ${conversion.status}` })
+  }
+  const importedPaths = [...pending.keys()]
+  planIndexes(repositoryRoot, pending)
+  const changes = applyWrites(repositoryRoot, pending, Boolean(values['dry-run']))
+
+  const { documents, findings } = loadDocuments(repositoryRoot, 'adr', pending)
+  const imported = documents.filter((document) => importedPaths.includes(document.path)).map(summarise)
+  // An accepted ADR is frozen once merged, so anything the check will reject has to be fixed in the same change.
+  const warnings = findings.filter(({ file }) => file && importedPaths.includes(file)).map(({ file, message }) => `${file}: ${message} Fix it before this import is merged.`)
+  const output = [
+    ...imported.map(formatSummary),
+    ...skipped.map(({ path: skippedPath, reason }) => `  skipped  ${skippedPath}\n    ${reason}`),
+    `${imported.length} imported, ${skipped.length} skipped.${imported.length > 0 ? ` Run \`${RUN} check\`.` : ''}`,
+  ]
+  return result({ imported, skipped }, output, changes, warnings)
+}
+
+/**
+ * Builds frontmatter for an ADR written before whatwhy from its heading and its `Status:` and `Date:` lines,
+ * and takes those lines out of the body. Everything else stays as written. Nothing is guessed: what cannot be
+ * read exactly is a reason to skip the file.
+ * @param {string} text
+ * @param {string} number the four digits of the filename
+ * @param {() => string | null} dateAdded the date the file was first committed, asked for only when it states none
+ * @returns {{ text: string, status: string } | { reason: string }}
+ */
+function convertLegacyAdr(text, number, dateAdded) {
+  if (/^---\r?\n/.test(text)) return { reason: 'It opens with a `---` block that is not flat `key: value` lines. Correct the frontmatter by hand.' }
+  const lineEnding = text.includes('\r\n') ? '\r\n' : '\n'
+  const textLines = text.split(/\r?\n/)
+  const isSectionHeading = (/** @type {string} */ line) => line.startsWith('## ')
+  const nextSection = (/** @type {number} */ from) => {
+    const offset = textLines.slice(from).findIndex(isSectionHeading)
+    return offset === -1 ? textLines.length : from + offset
+  }
+
+  const headingIndex = textLines.findIndex((line) => /^# \S/.test(line))
+  if (headingIndex === -1) return { reason: 'It has no `# ` heading to take the title from.' }
+  const heading = textLines[headingIndex].slice(2).trim()
+  const numbered = /^(?:ADR[- ]?)?(\d+)\s*[.:–—-]\s+(.+)$/i.exec(heading)
+  const title = numbered && Number(numbered[1]) === Number(number) ? numbered[2] : heading
+
+  /** @type {Record<string, string>} */
+  const stated = {}
+  const removed = new Set()
+  for (let index = headingIndex + 1; index < nextSection(headingIndex + 1); index++) {
+    const match = LEGACY_METADATA_LINE.exec(textLines[index])
+    if (!match) continue
+    stated[match[1].toLowerCase().replace('-', ' ')] ??= match[2]
+    removed.add(index)
+  }
+  const statusSectionIndex = textLines.findIndex((line) => /^## Status\s*$/i.test(line))
+  if (stated.status === undefined && statusSectionIndex !== -1) {
+    const contentIndexes = [...textLines.keys()].slice(statusSectionIndex + 1, nextSection(statusSectionIndex + 1)).filter((index) => textLines[index].trim() !== '')
+    if (contentIndexes.length > 0) stated.status = textLines[contentIndexes[0]].trim()
+    // A section that holds only the status is now frontmatter. One that says more is kept whole.
+    if (contentIndexes.length === 1) for (let index = statusSectionIndex; index <= contentIndexes[0]; index++) removed.add(index)
+  }
+
+  if (stated.status === undefined) return { reason: 'It has no `Status:` line or `## Status` section.' }
+  const statedStatus = stated.status.replace(/\.$/, '').toLowerCase()
+  const superseded = /^superseded(?:\s+by\s+(.+))?$/.exec(statedStatus)
+  const status = superseded ? 'superseded' : statedStatus
+  if (!DOCUMENT_KINDS.adr.statuses.includes(status)) return { reason: `Its status is "${stated.status}". Expected one of: ${DOCUMENT_KINDS.adr.statuses.join(', ')}, or "superseded by NNNN".` }
+  if (!superseded && stated['superseded by'] !== undefined) return { reason: `It has a \`Superseded by\` line but its status is "${stated.status}". Make them agree.` }
+  const supersededBy = superseded ? /\d{1,4}/.exec(superseded[1] ?? stated['superseded by'] ?? '')?.[0] : undefined
+  if (superseded && !supersededBy) return { reason: 'It is superseded but does not say by which ADR. Add a `Superseded by: NNNN` line.' }
+
+  const date = stated.date ?? dateAdded()
+  if (date === null) return { reason: 'It has no `Date:` line and no commit to take a date from. Add `Date: YYYY-MM-DD`, or commit the file first.' }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { reason: `Its date is "${date}". Expected YYYY-MM-DD.` }
+  if (title.includes('"') && title.includes("'")) return { reason: 'Its title mixes single and double quotes, which flat frontmatter cannot hold. Use one kind.' }
+
+  /** @type {string[]} */
+  const body = []
+  let hasGap = false // a removed line must not leave two blank lines where there was one on each side
+  textLines.forEach((line, index) => {
+    if (removed.has(index)) hasGap = true
+    else if (!(hasGap && line.trim() === '' && body.at(-1)?.trim() === '')) {
+      hasGap = false
+      body.push(line)
+    }
+  })
+  while (body[0]?.trim() === '') body.shift()
+  const frontmatter = ['---', `id: ADR-${number}`, `title: ${yamlScalar(title)}`, `status: ${status}`, `date: "${date}"`, ...(supersededBy ? [`superseded-by: ADR-${supersededBy.padStart(4, '0')}`] : []), '---', '']
+  return { text: [...frontmatter, ...body].join(lineEnding), status }
 }
 
 /** @param {CommandContext} context @returns {CommandResult} */
@@ -450,12 +564,14 @@ function runCheck({ repositoryRoot, values, environment }) {
   } else if (isDryRun) {
     throw new CommandError('invalid-arguments', '`check` only writes with --fix, so --dry-run needs --fix.')
   }
+  const isErrorsOnly = Boolean(values['errors-only'])
+  if (isErrorsOnly) findings = findings.filter((finding) => finding.severity === 'error')
   const errorCount = findings.filter((finding) => finding.severity === 'error').length
   const lines = findings.flatMap(({ severity, rule, code, file, message }) => [
     `${severity === 'error' ? '✖ error' : '⚠ warn '}  ${rule}/${code}${file ? `  ${file}` : ''}\n    ${message}`,
     ...(environment.GITHUB_ACTIONS ? [`::${severity === 'error' ? 'error' : 'warning'} ${file ? `file=${file},` : ''}title=whatwhy ${rule}/${code}::${message}`] : []),
   ])
-  lines.push(`whatwhy: ${errorCount} error(s), ${findings.length - errorCount} warning(s)`)
+  lines.push(`whatwhy: ${errorCount} error(s)${isErrorsOnly ? '' : `, ${findings.length - errorCount} warning(s)`}`)
   return { ...result({ ok: errorCount === 0, findings }, lines, changes), exitCode: errorCount > 0 ? 1 : 0 }
 }
 
@@ -627,7 +743,7 @@ function loadDocuments(repositoryRoot, kind, pending = new Map()) {
     }
     const parsed = parseDocument(pending.get(path)?.text ?? readText(join(repositoryRoot, path)))
     if (!parsed) {
-      findings.push(structureFinding('invalid-frontmatter', path, 'Expected the file to open with a `---` block of flat `key: value` lines. Copy TEMPLATE.md.'))
+      findings.push(structureFinding('invalid-frontmatter', path, `Expected the file to open with a \`---\` block of flat \`key: value\` lines. Copy TEMPLATE.md${kind === 'adr' ? `, or run \`${RUN} import\` if this ADR was written before whatwhy` : ''}.`))
       continue
     }
     const document = { ...parsed, kind, path, fileName, number: Number(nameMatch[1]), id: `${prefix}-${nameMatch[1]}` }
@@ -971,6 +1087,7 @@ function parseCommandLine(commandLine) {
         json: { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         fix: { type: 'boolean' },
+        'errors-only': { type: 'boolean' },
         help: { type: 'boolean' },
         version: { type: 'boolean' },
         base: { type: 'string' },

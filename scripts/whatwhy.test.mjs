@@ -349,6 +349,20 @@ test('check reports findings and exits 1 only when there are errors', () => {
   assert.equal(exitCode, 1)
 })
 
+test('check --errors-only leaves out warnings, and keeps a rule the config sets to error', () => {
+  const repository = createRepository()
+  repository.write('src/feature.js', 'export {}\n')
+  assert.deepEqual(repository.run('check').data.findings.map((/** @type {{ code: string }} */ finding) => finding.code), ['missing-spec-reference'])
+  const quiet = repository.run('check', '--errors-only')
+  assert.deepEqual(quiet.data, { ok: true, findings: [] })
+  assert.deepEqual(quiet.lines, ['whatwhy: 0 error(s)'])
+
+  repository.write('whatwhy.config.json', JSON.stringify({ rules: { traceability: 'error' } }))
+  const blocked = repository.run('check', '--errors-only')
+  assert.deepEqual(blocked.data.findings.map((/** @type {{ code: string }} */ finding) => finding.code), ['missing-spec-reference'])
+  assert.equal(blocked.exitCode, 1)
+})
+
 test('check --fix repairs a stale index, a mismatched id and a missing reciprocal supersede', () => {
   const repository = createRepository()
   repository.write('docs/adr/0002-use-postgres.md', adr({ id: 'ADR-0007', extra: 'supersedes: ADR-0001' }))
@@ -419,6 +433,20 @@ test('the hook that init installs blocks a commit that breaks the structure rule
   repository.commit('chore: adopt whatwhy')
   repository.write('docs/adr/0002-skips-a-number.md', adr({ id: 'ADR-0002' }))
   assert.throws(() => repository.commit('docs: add an ADR (ADR-0002)'), /numbering-not-contiguous/)
+})
+
+test('the hook that init installs lets a commit with only warnings through without printing them', () => {
+  const repository = createEmptyRepository()
+  repository.run('init')
+  repository.commit('chore: adopt whatwhy')
+  repository.git('checkout', '-q', '-b', 'feature/work')
+  repository.write('src/feature.js', 'export {}\n')
+  assert.deepEqual(repository.codes('warn'), ['missing-spec-reference'])
+  repository.git('add', '-A')
+  const commit = spawnSync('git', ['-c', 'user.name=whatwhy', '-c', 'user.email=whatwhy@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'feat: add feature'], { cwd: repository.root, encoding: 'utf8' })
+  assert.equal(commit.status, 0)
+  assert.match(commit.stdout + commit.stderr, /whatwhy: 0 error\(s\)\n/)
+  assert.doesNotMatch(commit.stdout + commit.stderr, /warn/)
 })
 
 test('init in an existing repository keeps every file that is already there', () => {
@@ -502,7 +530,7 @@ test('init leaves an existing hooks path alone and says how to wire the hook in'
   const repository = createEmptyRepository()
   repository.git('config', 'core.hooksPath', '.husky')
   const { warnings } = repository.run('init')
-  assert.match(warnings.join(), /git runs hooks from "\.husky".*exec node scripts\/whatwhy\.mjs check --message-file/)
+  assert.match(warnings.join(), /git runs hooks from "\.husky".*exec node scripts\/whatwhy\.mjs check --errors-only --message-file/)
   assert.equal(repository.git('config', '--get', 'core.hooksPath').trim(), '.husky')
 })
 
@@ -605,6 +633,127 @@ for (const setup of [['init'], ['init', ...ELSEWHERE], ['upgrade']]) {
   })
 }
 
+// === IMPORT ===
+
+test('import converts ADRs written before whatwhy, in place, keeping numbers and extra sections', () => {
+  const repository = createLegacyRepository({
+    '0001-use-sqlite.md': legacyAdr({}),
+    '0002-use-files.md': legacyAdr({ number: '0002', title: 'Use files: one per "record"', metadata: 'Date: 2026-10-27\nStatus: superseded by 0003\n\nSuperseded by: 0003' }),
+    '0003-use-postgres.md': legacyAdr({ number: '0003', title: 'Use Postgres', metadata: 'Date: 2026-10-28\nStatus: proposed' }),
+    'README.md': '# Decisions\n\nDate: YYYY-MM-DD\nStatus: proposed | accepted | superseded by NNNN\n',
+  })
+  assert.match(repository.run('init', '--adr-dir', 'specifications/decisions').lines.join('\n'), /holds ADRs written before whatwhy\. Run `node scripts\/whatwhy\.mjs import`/)
+  const invalid = repository.check().filter((finding) => finding.code === 'invalid-frontmatter')
+  assert.equal(invalid.length, 3)
+  assert.match(invalid[0].message, /or run `node scripts\/whatwhy\.mjs import`/)
+
+  const { data, changes, warnings } = repository.run('import')
+  assert.deepEqual(data.imported.map((/** @type {{ id: string, status: string, title: string, date: string }} */ each) => [each.id, each.status, each.title, each.date]), [
+    ['ADR-0001', 'accepted', 'Use SQLite', '2026-10-26'],
+    ['ADR-0002', 'superseded', 'Use files: one per "record"', '2026-10-27'],
+    ['ADR-0003', 'proposed', 'Use Postgres', '2026-10-28'],
+  ])
+  assert.equal(data.imported[1].supersededBy, 'ADR-0003')
+  assert.deepEqual(data.skipped, [])
+  assert.deepEqual(warnings, [])
+  assert.deepEqual(changes.map((change) => `${change.action} ${change.path}`), [
+    'update specifications/decisions/0001-use-sqlite.md',
+    'update specifications/decisions/0002-use-files.md',
+    'update specifications/decisions/0003-use-postgres.md',
+    'update specifications/decisions/INDEX.md',
+  ])
+  assert.equal(
+    repository.read('specifications/decisions/0002-use-files.md'),
+    `---\nid: ADR-0002\ntitle: 'Use files: one per "record"'\nstatus: superseded\ndate: "2026-10-27"\nsuperseded-by: ADR-0003\n---\n\n${legacyAdr({ number: '0002', title: 'Use files: one per "record"', metadata: '' })}`,
+  )
+  assert.match(repository.read('specifications/decisions/README.md'), /^Status: proposed/m, 'the README is not an ADR')
+  assert.deepEqual(repository.check(), [], 'no structure errors, and converting an accepted ADR is not an edit to a frozen one')
+  assert.equal(repository.run('show', 'ADR-0001', '--section', 'Revisit when').data.content, '## Revisit when\n\nIt hurts.\n')
+})
+
+test('import reads a "## Status" section, and drops it only when the status is all it says', () => {
+  const nygard = (/** @type {string} */ status) => `# 1. Record decisions\n\nDate: 2026-01-02\n\n## Status\n\n${status}\n\n## Context\n\nWhy.\n\n## Decision\n\nWe will.\n\n## Consequences\n\nThen.\n`
+  const repository = createLegacyRepository({
+    '0001-record-decisions.md': nygard('Accepted'),
+    '0002-keep-the-note.md': nygard('Accepted\n\nAmended by the team in March.').replace('# 1.', '# ADR-0002:'),
+  })
+  repository.run('init', '--adr-dir', 'specifications/decisions')
+  assert.deepEqual(repository.run('import').data.imported.map((/** @type {{ status: string, title: string }} */ each) => [each.status, each.title]), [['accepted', 'Record decisions'], ['accepted', 'Record decisions']])
+  assert.equal(repository.read('specifications/decisions/0001-record-decisions.md'), '---\nid: ADR-0001\ntitle: Record decisions\nstatus: accepted\ndate: "2026-01-02"\n---\n\n# 1. Record decisions\n\n## Context\n\nWhy.\n\n## Decision\n\nWe will.\n\n## Consequences\n\nThen.\n')
+  assert.match(repository.read('specifications/decisions/0002-keep-the-note.md'), /## Status\n\nAccepted\n\nAmended by the team in March\.\n\n## Context/)
+  assert.deepEqual(repository.codes('error'), [])
+})
+
+test('import dates an ADR that states no date from the commit that added it', () => {
+  const repository = createEmptyRepository()
+  repository.write('docs/adr/0001-use-sqlite.md', legacyAdr({ metadata: 'Status: accepted' }))
+  repository.commit('docs: record a decision', '--date=2025-03-04T12:00:00')
+  repository.run('init')
+  repository.write('docs/adr/0001-use-sqlite.md', `${repository.read('docs/adr/0001-use-sqlite.md')}\nA later note.\n`)
+  repository.commit('docs: add a note', '--date=2025-06-07T12:00:00', '--no-verify')
+  assert.equal(repository.run('import').data.imported[0].date, '2025-03-04')
+})
+
+test('import skips what it cannot read exactly, says why, and leaves the file untouched', () => {
+  const files = {
+    '0001-no-heading.md': 'Date: 2026-10-26\nStatus: accepted\n\n## Context\n',
+    '0002-no-status.md': legacyAdr({ number: '0002', metadata: 'Date: 2026-10-26' }),
+    '0003-unknown-status.md': legacyAdr({ number: '0003', metadata: 'Date: 2026-10-26\nStatus: in review' }),
+    '0004-superseded-by-nothing.md': legacyAdr({ number: '0004', metadata: 'Date: 2026-10-26\nStatus: superseded' }),
+    '0005-bad-date.md': legacyAdr({ number: '0005', metadata: 'Date: 26 October 2026\nStatus: accepted' }),
+    '0006-nested-frontmatter.md': '---\ntags:\n  - one\n---\n\n# 0006. Nested\n',
+    'Use_Queues.md': legacyAdr({ number: '0007' }),
+  }
+  const repository = createLegacyRepository(files)
+  repository.run('init', '--adr-dir', 'specifications/decisions')
+  repository.write('specifications/decisions/0008-never-committed.md', legacyAdr({ number: '0008', metadata: 'Status: accepted' }))
+  const { data, changes } = repository.run('import')
+  assert.deepEqual(data.imported, [])
+  assert.deepEqual(changes, [])
+  assert.deepEqual(data.skipped.map((/** @type {{ path: string, reason: string }} */ each) => [each.path.split('/').at(-1), each.reason.split(/[.:]/)[0]]), [
+    ['0001-no-heading.md', 'It has no `# ` heading to take the title from'],
+    ['0002-no-status.md', 'It has no `Status'],
+    ['0003-unknown-status.md', 'Its status is "in review"'],
+    ['0004-superseded-by-nothing.md', 'It is superseded but does not say by which ADR'],
+    ['0005-bad-date.md', 'Its date is "26 October 2026"'],
+    ['0006-nested-frontmatter.md', 'It opens with a `---` block that is not flat `key'],
+    ['0008-never-committed.md', 'It has no `Date'],
+    ['Use_Queues.md', 'The filename is not NNNN-kebab-case-title'],
+  ])
+  for (const [fileName, content] of Object.entries(files)) assert.equal(repository.read(`specifications/decisions/${fileName}`), content)
+})
+
+test('import warns about an imported ADR the check will reject, while it can still be fixed', () => {
+  const repository = createLegacyRepository({ '0001-use-sqlite.md': legacyAdr({}).replace('## Consequences', '## Outcome') })
+  repository.run('init', '--adr-dir', 'specifications/decisions')
+  const { data, warnings } = repository.run('import')
+  assert.equal(data.imported.length, 1)
+  assert.match(warnings.join(), /0001-use-sqlite\.md: Add a "## Consequences" section.*Fix it before this import is merged/)
+})
+
+test('`import` with --dry-run reports its changes and writes nothing', () => {
+  const repository = createLegacyRepository({ '0001-use-sqlite.md': legacyAdr({}) })
+  repository.run('init', '--adr-dir', 'specifications/decisions')
+  repository.commit('chore: adopt whatwhy', '--no-verify')
+  const { data, changes } = repository.run('import', '--dry-run')
+  assert.deepEqual(changes.map((change) => change.path), ['specifications/decisions/0001-use-sqlite.md', 'specifications/decisions/INDEX.md'])
+  assert.equal(data.imported[0].id, 'ADR-0001')
+  assert.equal(repository.git('status', '--porcelain'), '')
+})
+
+test('`import` run twice succeeds and changes nothing the second time', () => {
+  const repository = createLegacyRepository({ '0001-use-sqlite.md': legacyAdr({}), '0002-no-status.md': legacyAdr({ number: '0002', metadata: '' }) })
+  repository.run('init', '--adr-dir', 'specifications/decisions')
+  assert.equal(repository.run('import').changes.length, 2)
+  const snapshot = repository.git('status', '--porcelain') + repository.git('diff')
+  const second = repository.run('import')
+  assert.deepEqual(second.changes, [])
+  assert.deepEqual(second.data.imported, [])
+  assert.equal(second.data.skipped.length, 1, 'what could not be converted is reported every time')
+  assert.equal(second.exitCode, 0)
+  assert.equal(repository.git('status', '--porcelain') + repository.git('diff'), snapshot)
+})
+
 // === EVERY COMMAND ===
 
 const MUTATIONS = [
@@ -683,6 +832,15 @@ function createRepository() {
   repository.commit('chore: initial commit')
   repository.git('checkout', '-q', '-b', 'feature/work')
   assert.match(repository.read('docs/adr/INDEX.md'), /ADR-0001/)
+  return repository
+}
+
+/** A repository on a feature branch whose main has ADRs written before whatwhy in specifications/decisions. @param {Record<string, string>} files by filename */
+function createLegacyRepository(files) {
+  const repository = createEmptyRepository()
+  for (const [fileName, content] of Object.entries(files)) repository.write(`specifications/decisions/${fileName}`, content)
+  repository.commit('docs: record decisions')
+  repository.git('checkout', '-q', '-b', 'chore/adopt-whatwhy')
   return repository
 }
 
