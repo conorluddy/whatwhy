@@ -12,7 +12,7 @@ import { basename, dirname, isAbsolute, join, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
-export const VERSION = '0.2.0'
+export const VERSION = '0.2.1'
 
 const USAGE = `whatwhy ${VERSION}: PRDs say what, ADRs say why.
 
@@ -34,7 +34,7 @@ Setup
   init [--name <name>] [--description <text>]              add the process to this repository
        [--adr-dir <path>] [--prd-dir <path>]               where documents live, when not docs/adr and docs/prd
   import                                 convert ADRs written before whatwhy, in place
-  upgrade                                refresh the script, templates and AGENTS.md process section
+  upgrade                                refresh the script and the AGENTS.md process section
   doctor                                 report wiring problems
 
 --json prints { data, changes[], warnings[] }, or { code, message, retryable } on failure.
@@ -96,10 +96,10 @@ const SCRIPT_PATH = 'scripts/whatwhy.mjs'
 const CONFIGURATION_PATH = 'whatwhy.config.json'
 const HOOKS_PATH = '.githooks'
 
-/** What `init` creates from templates/ when absent. `upgrade` refreshes the entries marked isUpgraded. @param {Directories} directories @returns {{ template: string, path: string, isExecutable?: boolean, isUpgraded?: boolean }[]} */
+/** What `init` creates from templates/ when absent. `upgrade` restores a missing TEMPLATE.md and never touches an existing one: the repository owns its templates. @param {Directories} directories @returns {{ template: string, path: string, isExecutable?: boolean }[]} */
 const scaffold = (directories) => [
-  { template: 'adr.md', path: `${directories.adr}/TEMPLATE.md`, isUpgraded: true },
-  { template: 'prd.md', path: `${directories.prd}/TEMPLATE.md`, isUpgraded: true },
+  { template: 'adr.md', path: `${directories.adr}/TEMPLATE.md` },
+  { template: 'prd.md', path: `${directories.prd}/TEMPLATE.md` },
   { template: 'config.json', path: CONFIGURATION_PATH },
   { template: 'commit-msg', path: `${HOOKS_PATH}/commit-msg`, isExecutable: true },
   { template: 'workflow.yml', path: '.github/workflows/whatwhy.yml' },
@@ -394,7 +394,8 @@ function runUpgrade({ repositoryRoot, positionals, values }) {
   const warnings = []
   const template = readTemplate('AGENTS.md')
   pending.set(SCRIPT_PATH, { text: readText(fileURLToPath(import.meta.url)), summary: `whatwhy ${VERSION}`, isExecutable: true })
-  for (const entry of scaffold(loadConfiguration(repositoryRoot).directories).filter(({ isUpgraded }) => isUpgraded)) pending.set(entry.path, { text: readTemplate(entry.template), summary: `whatwhy ${VERSION} template` })
+  const missingTemplates = scaffold(loadConfiguration(repositoryRoot).directories).filter(({ path }) => path.endsWith('/TEMPLATE.md') && !existsSync(join(repositoryRoot, path)))
+  for (const { template: name, path } of missingTemplates) pending.set(path, { text: readTemplate(name), summary: 'missing template restored' })
 
   const agentsPath = join(repositoryRoot, 'AGENTS.md')
   const existing = existsSync(agentsPath) ? readText(agentsPath) : null

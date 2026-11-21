@@ -48,9 +48,7 @@ satisfy the check.
 ## The check
 
 `whatwhy check` runs on every pull request, and on every commit once the hook
-is on. The hook prints errors only, so run `whatwhy check` yourself to see
-warnings before the pull request does. `whatwhy doctor` says whether the hook
-is on, and what else is not wired up.
+is on. `whatwhy doctor` says whether it is, and what else is not wired up.
 
 | Rule | Requires | Default |
 | --- | --- | --- |
@@ -61,8 +59,7 @@ is on, and what else is not wired up.
 
 Each finding says how to fix it, and `whatwhy check --fix` repairs the
 mechanical ones. Fix the cause or give the reason; never use `--no-verify`.
-Severities, `architecturalPaths` and the document folders are set in
-`whatwhy.config.json`.
+Severities and `architecturalPaths` are set in `whatwhy.config.json`.
 
 Every command takes `--json` and returns `{ data, changes[], warnings[] }`, or
 `{ code, message, retryable }` on failure. Commands that write take

@@ -46,9 +46,10 @@ Setup
    or existing repository, and vendors the script. Generated files describe the
    target project, so nothing needs replacing afterwards. Existing files are
    never overwritten.
-2. `whatwhy upgrade` refreshes the vendored script, the templates and the
-   managed process section of `AGENTS.md` to the package version. It never
-   changes a PRD, an ADR or the project section of `AGENTS.md`.
+2. `whatwhy upgrade` refreshes the vendored script and the managed process
+   section of `AGENTS.md` to the package version, and restores a missing
+   template. It never changes a PRD, an ADR, an existing template or the
+   project section of `AGENTS.md`.
 3. `whatwhy doctor` reports wiring problems: hook path, workflow, config
    validity, Node version and base branch. Each finding says how to fix it.
 

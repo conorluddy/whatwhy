@@ -24,8 +24,9 @@ runs its own copy, offline:
 node scripts/whatwhy.mjs status
 ```
 
-`npx whatwhy upgrade` brings a repository up to the latest version. Requires
-Node 20 or later and git. Nothing is installed.
+`npx whatwhy upgrade` brings the script and the process section of `AGENTS.md`
+up to the latest version. It leaves each `TEMPLATE.md` alone, so add your own
+sections there. Requires Node 20 or later and git. Nothing is installed.
 
 Already keeping ADRs? Point whatwhy at them and convert them where they are:
 

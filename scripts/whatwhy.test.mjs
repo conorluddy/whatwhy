@@ -546,7 +546,7 @@ test('init outside a git repository fails and says what to run', () => {
   assert.throws(() => runCommand(root, ['init']), (/** @type {CommandError} */ error) => error.code === 'not-a-repository' && /git init/.test(error.message))
 })
 
-test('upgrade refreshes the script, the templates and the managed section, and nothing else', () => {
+test('upgrade refreshes the script and the managed section, and nothing else', () => {
   const repository = createEmptyRepository()
   repository.run('init', '--name', 'Acme')
   repository.run('new', 'adr', 'Use queues')
@@ -554,16 +554,31 @@ test('upgrade refreshes the script, the templates and the managed section, and n
   const edited = agents.replace('**Acme**', '**Acme Ltd**').replace('## The check', '## The cheque')
   repository.write('AGENTS.md', edited)
   repository.write('scripts/whatwhy.mjs', '// an older version\n')
-  repository.write('docs/adr/TEMPLATE.md', 'an older template\n')
+  repository.write('docs/adr/TEMPLATE.md', 'an edited template\n')
   repository.write('whatwhy.config.json', '{ "baseBranch": "main", "architecturalPaths": [] }\n')
   const adrText = repository.read('docs/adr/0001-use-queues.md')
 
   const { changes } = repository.run('upgrade')
-  assert.deepEqual(changes.map((change) => change.path), ['scripts/whatwhy.mjs', 'docs/adr/TEMPLATE.md', 'AGENTS.md'])
+  assert.deepEqual(changes.map((change) => change.path), ['scripts/whatwhy.mjs', 'AGENTS.md'])
+  assert.equal(repository.read('docs/adr/TEMPLATE.md'), 'an edited template\n')
   assert.equal(repository.read('AGENTS.md'), agents.replace('**Acme**', '**Acme Ltd**'))
   assert.equal(repository.read('scripts/whatwhy.mjs'), readFileSync(SCRIPT_PATH, 'utf8'))
   assert.equal(repository.read('docs/adr/0001-use-queues.md'), adrText)
   assert.equal(repository.read('whatwhy.config.json'), '{ "baseBranch": "main", "architecturalPaths": [] }\n')
+})
+
+test('upgrade restores a template that is missing and keeps one that was edited', () => {
+  const repository = createEmptyRepository()
+  repository.run('init')
+  const prdTemplate = repository.read('docs/prd/TEMPLATE.md')
+  rmSync(join(repository.root, 'docs/prd/TEMPLATE.md'))
+  repository.write('docs/adr/TEMPLATE.md', `${repository.read('docs/adr/TEMPLATE.md')}\n## Revisit when\n\nWhat would reopen this decision.\n`)
+
+  const { changes } = repository.run('upgrade')
+  assert.deepEqual(changes.map((change) => change.path), ['docs/prd/TEMPLATE.md'])
+  assert.equal(repository.read('docs/prd/TEMPLATE.md'), prdTemplate)
+  repository.run('new', 'adr', 'Use queues')
+  assert.match(repository.read('docs/adr/0001-use-queues.md'), /^## Revisit when$/m)
 })
 
 test('upgrade leaves an AGENTS.md without markers untouched and says so', () => {

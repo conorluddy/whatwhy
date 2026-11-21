@@ -1,6 +1,6 @@
 {
   "name": "whatwhy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "PRDs say what, ADRs say why: a process for agentic repositories, enforced by one dependency-free script.",
   "keywords": [
     "adr",
