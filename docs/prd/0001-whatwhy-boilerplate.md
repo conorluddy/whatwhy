@@ -57,9 +57,9 @@ unless something stops the commit.
 
 ## Success criteria
 
-- `npm run whatwhy:check` passes on this repository.
+- `node scripts/whatwhy.mjs check` passes on this repository.
 - Each rule has a test that shows it firing and a test that shows it passing.
 - A repository created from the template needs one command (`npm run setup`)
   before the rules apply to every commit.
-- Following `ADOPT.md` in a fresh copy ends with `npm run whatwhy:check` passing
-  and nothing left that describes whatwhy as the product.
+- Following `ADOPT.md` in a fresh copy ends with `node scripts/whatwhy.mjs check`
+  passing and nothing left that describes whatwhy as the product.

@@ -1,4 +1,4 @@
 #!/bin/sh
-# Runs on every commit once `npm run setup` has pointed git at .githooks.
+# Runs on every commit once `git config core.hooksPath .githooks` has been run in the clone.
 # commit-msg, not pre-commit, because the traceability rule reads the message.
-exec node "$(git rev-parse --show-toplevel)/scripts/whatwhy.mjs" --message-file "$1"
+exec node "$(git rev-parse --show-toplevel)/scripts/whatwhy.mjs" check --message-file "$1"
