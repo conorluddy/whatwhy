@@ -4,4 +4,4 @@
 | ID | Title | Status | Date |
 | --- | --- | --- | --- |
 | [PRD-0001](0001-whatwhy-boilerplate.md) | whatwhy, a boilerplate for agentic repositories | approved | 2026-11-21 |
-| [PRD-0002](0002-whatwhy-cli.md) | The whatwhy CLI package | draft | 2026-11-21 |
+| [PRD-0002](0002-whatwhy-cli.md) | The whatwhy CLI package | approved | 2026-11-21 |
