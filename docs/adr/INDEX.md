@@ -7,3 +7,7 @@
 | [ADR-0002](0002-one-dependency-free-node-script-enforces-the-process.md) | One dependency-free Node script enforces the process | accepted | 2026-11-21 |
 | [ADR-0003](0003-agents-md-is-the-single-entry-point.md) | AGENTS.md is the single entry point for agents | accepted | 2026-11-21 |
 | [ADR-0004](0004-plans-as-a-third-document-type.md) | Plans as a third document type | rejected | 2026-11-21 |
+| [ADR-0005](0005-the-npm-package-vendors-its-script-into-the-repository.md) | The npm package vendors its script into the repository | accepted | 2026-11-21 |
+| [ADR-0006](0006-the-template-repository-stays-alongside-init.md) | The template repository stays alongside init | accepted | 2026-11-21 |
+| [ADR-0007](0007-comment-markers-bound-the-managed-section-of-agents-md.md) | Comment markers bound the managed section of AGENTS.md | accepted | 2026-11-21 |
+| [ADR-0008](0008-the-cli-stays-one-file-with-scaffolding-in-templates.md) | The CLI stays one file, with scaffolding in a templates directory | accepted | 2026-11-21 |
