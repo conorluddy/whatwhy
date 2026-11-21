@@ -101,10 +101,9 @@ Every command
 - Each requirement has a test, including a run-twice test for every mutation.
 - This repository uses the CLI for its own documents.
 
-## Open decisions
+## Decisions
 
-Each needs an ADR before the code that depends on it:
-
-1. What happens to the template repository and `ADOPT.md` once `init` exists.
-2. How `upgrade` marks the managed section of `AGENTS.md`.
-3. Source layout: one file, or modules bundled into the one vendored file.
+- ADR-0005: the package vendors its script into the repository.
+- ADR-0006: the template repository and `ADOPT.md` stay alongside `init`.
+- ADR-0007: comment markers bound the managed section of `AGENTS.md`.
+- ADR-0008: the CLI stays one file, with scaffolding in `templates/`.
