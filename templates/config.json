@@ -1,0 +1,18 @@
+{
+  "baseBranch": "main",
+  "rules": {
+    "structure": "error",
+    "immutability": "error",
+    "traceability": "warn",
+    "architecture": "warn"
+  },
+  "architecturalPaths": [
+    "**/package.json",
+    "whatwhy.config.json",
+    "scripts/whatwhy.mjs",
+    ".githooks/**",
+    ".github/workflows/**",
+    "**/migrations/**",
+    "**/Dockerfile"
+  ]
+}
