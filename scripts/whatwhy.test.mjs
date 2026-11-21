@@ -449,6 +449,13 @@ test('the hook that init installs lets a commit with only warnings through witho
   assert.doesNotMatch(commit.stdout + commit.stderr, /warn/)
 })
 
+test('init says where to add house sections, in the folders it was given', () => {
+  const repository = createEmptyRepository()
+  const { lines } = repository.run('init', '--adr-dir', 'specifications/decisions')
+  assert.match(lines.join('\n'), /Add them to specifications\/decisions\/TEMPLATE\.md and docs\/prd\/TEMPLATE\.md\. `upgrade` leaves both alone\./)
+  assert.doesNotMatch(repository.run('init').lines.join('\n'), /TEMPLATE\.md/)
+})
+
 test('init in an existing repository keeps every file that is already there', () => {
   const repository = createRepository()
   repository.write('AGENTS.md', '# AGENTS.md\n\nOur own guidance.\n')
