@@ -24,7 +24,8 @@ Get these from the human. Do not invent them.
 | `docs/prd/0001-whatwhy-boilerplate.md` | Replace with your product's PRD: keep the number, rename the file to `0001-<title>.md`, and rewrite it from `docs/prd/TEMPLATE.md` with status `draft` until the human approves it. |
 | `AGENTS.md` | Rewrite the "This project" section. Delete the notice at the top about `ADOPT.md`. |
 | `README.md` | Replace with your project's README. |
-| `package.json` | Set `name`, `description` and `version`. Remove `repository`, `bin`, `files` and the `test` script; keep `setup`. If the project is not a Node project, delete the file. |
+| `LICENSE` | Replace with your project's licence, or delete it. It covers whatwhy, not your code. |
+| `package.json` | Set `name`, `description` and `version`. Remove `repository`, `license`, `bin`, `files` and the `test` script; keep `setup`. If the project is not a Node project, delete the file. |
 | `templates/`, `scripts/whatwhy.test.mjs`, `.github/workflows/test.yml` | Delete. They belong to the whatwhy package. `npx whatwhy upgrade` brings later versions of the script. |
 | `whatwhy.config.json` | Set `architecturalPaths` for your stack. |
 | `ADOPT.md` | Delete, last. |

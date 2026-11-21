@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "PRDs say what, ADRs say why: a process for agentic repositories, enforced by one dependency-free script.",
   "repository": "github:conorluddy/whatwhy",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "whatwhy": "scripts/whatwhy.mjs"
