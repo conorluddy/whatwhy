@@ -1,5 +1,9 @@
 {
   "baseBranch": "main",
+  "directories": {
+    "adr": "docs/adr",
+    "prd": "docs/prd"
+  },
   "rules": {
     "structure": "error",
     "immutability": "error",

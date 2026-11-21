@@ -12,6 +12,7 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const SCRIPT_PATH = join(PACKAGE_ROOT, 'scripts/whatwhy.mjs')
 const ADR_PATH = 'docs/adr/0001-use-sqlite.md'
 const PRD_PATH = 'docs/prd/0001-first-product.md'
+const ELSEWHERE = ['--adr-dir', 'specifications/decisions', '--prd-dir', 'specifications/requirements']
 
 // === STRUCTURE ===
 
@@ -47,6 +48,12 @@ test('a reference to a document that does not exist is an error', () => {
   repository.write('docs/adr/0002-use-queues.md', adr({ id: 'ADR-0002', extra: 'prd: PRD-0009' }))
   repository.reindex()
   assert.deepEqual(repository.codes('error'), ['unresolved-reference'])
+})
+
+test('a README.md in a document folder is not a document', () => {
+  const repository = createRepository()
+  repository.write('docs/adr/README.md', '# How we write decisions\n')
+  assert.deepEqual(repository.codes('error'), [])
 })
 
 // === IMMUTABILITY ===
@@ -136,6 +143,14 @@ test('no-spec with a reason satisfies traceability', () => {
   assert.deepEqual(repository.check({ pullRequestText: 'Fix typo\n\nno-spec: typo fix' }), [])
 })
 
+test('an ID written with a space, as in "ADR 0001", counts as a reference', () => {
+  const repository = createRepository()
+  repository.write('src/feature.js', 'export {}\n')
+  repository.commit('feat: add feature, as decided in ADR 0001')
+  assert.deepEqual(repository.check(), [])
+  assert.deepEqual(repository.run('status').data.referenced.map((/** @type {{ id: string }} */ each) => each.id), ['ADR-0001'])
+})
+
 test('a reference to a spec that does not exist is a warning', () => {
   const repository = createRepository()
   repository.write('src/feature.js', 'export {}\n')
@@ -171,6 +186,37 @@ test('an unknown severity fails with a message naming the setting', () => {
   const repository = createRepository()
   repository.write('whatwhy.config.json', JSON.stringify({ rules: { traceability: 'loud' } }))
   assert.throws(() => repository.check(), /rules\.traceability is "loud"/)
+})
+
+test('documents are read from and written to the folders the config names', () => {
+  const repository = createEmptyRepository()
+  repository.write('whatwhy.config.json', JSON.stringify({ directories: { adr: 'specifications/decisions/', prd: './specifications/requirements' } }))
+  repository.write('specifications/requirements/0001-first-product.md', prd())
+  repository.write('specifications/decisions/0001-use-sqlite.md', adr({}))
+  for (const [kind, folder] of [['adr', 'decisions'], ['prd', 'requirements']]) repository.write(`specifications/${folder}/TEMPLATE.md`, readFileSync(join(PACKAGE_ROOT, `docs/${kind}/TEMPLATE.md`), 'utf8'))
+  assert.deepEqual(repository.reindex(), ['specifications/decisions/INDEX.md', 'specifications/requirements/INDEX.md'])
+  repository.commit('chore: initial commit')
+  repository.git('checkout', '-q', '-b', 'feature/work')
+
+  assert.equal(repository.run('new', 'adr', 'Use queues', '--prd', 'PRD-0001').data.path, 'specifications/decisions/0002-use-queues.md')
+  assert.equal(repository.run('new', 'prd', 'Team accounts').data.path, 'specifications/requirements/0002-team-accounts.md')
+  assert.deepEqual(repository.run('list').data.map((/** @type {{ id: string }} */ each) => each.id), ['PRD-0001', 'PRD-0002', 'ADR-0001', 'ADR-0002'])
+  assert.deepEqual(repository.check(), [], 'the new ADR satisfies traceability and architecture from its configured folder')
+  assert.equal(existsSync(join(repository.root, 'docs')), false)
+
+  repository.write('specifications/decisions/0001-use-sqlite.md', adr({}).replace('We will.', 'We will not.'))
+  assert.deepEqual(repository.codes('error'), ['frozen-adr-edited'])
+  assert.match(repository.failure('show', 'ADR-0042').message, /See specifications\/decisions\/INDEX\.md/)
+})
+
+test('a document folder outside the repository, or shared by both kinds, fails with a message naming the setting', () => {
+  const repository = createRepository()
+  for (const adrDirectory of ['/tmp/decisions', '../decisions', '.', '']) {
+    repository.write('whatwhy.config.json', JSON.stringify({ directories: { adr: adrDirectory } }))
+    assert.throws(() => repository.check(), (/** @type {CommandError} */ error) => error.code === 'invalid-configuration' && /directories\.adr is ".*"\. Expected a folder inside the repository/.test(error.message), adrDirectory)
+  }
+  repository.write('whatwhy.config.json', JSON.stringify({ directories: { adr: 'docs/prd' } }))
+  assert.throws(() => repository.check(), /directories\.adr and .*directories\.prd are both "docs\/prd"/)
 })
 
 // === AUTHORING ===
@@ -390,6 +436,68 @@ test('init in an existing repository keeps every file that is already there', ()
   assert.deepEqual(repository.codes('error'), [])
 })
 
+test('init --adr-dir and --prd-dir put the documents elsewhere, and every later command follows', () => {
+  const repository = createEmptyRepository()
+  const { data, changes } = repository.run('init', ...ELSEWHERE)
+  assert.deepEqual(data.directories, { adr: 'specifications/decisions', prd: 'specifications/requirements' })
+  assert.deepEqual(JSON.parse(repository.read('whatwhy.config.json')).directories, data.directories)
+  assert.deepEqual(changes.map((change) => change.path).filter((path) => path.startsWith('specifications/')).sort(), [
+    'specifications/decisions/INDEX.md',
+    'specifications/decisions/TEMPLATE.md',
+    'specifications/requirements/INDEX.md',
+    'specifications/requirements/TEMPLATE.md',
+  ])
+  assert.equal(existsSync(join(repository.root, 'docs')), false)
+
+  repository.commit('chore: adopt whatwhy\n\nno-spec: adopting whatwhy\nno-adr: adopting whatwhy')
+  assert.equal(repository.run('new', 'adr', 'Use queues').data.path, 'specifications/decisions/0001-use-queues.md')
+  assert.deepEqual(repository.run('check').data, { ok: true, findings: [] })
+  assert.deepEqual(repository.run('doctor').data.problems, [])
+})
+
+test('init does not use --adr-dir or --prd-dir when the config already exists, and says so', () => {
+  const repository = createRepository()
+  const configuration = repository.read('whatwhy.config.json')
+  const { data, warnings } = repository.run('init', ...ELSEWHERE)
+  assert.match(warnings.join(), /--adr-dir and --prd-dir were not used/)
+  assert.deepEqual(data.directories, { adr: 'docs/adr', prd: 'docs/prd' })
+  assert.equal(repository.read('whatwhy.config.json'), configuration)
+  assert.equal(existsSync(join(repository.root, 'specifications')), false)
+})
+
+test('init rejects a folder outside the repository', () => {
+  const repository = createEmptyRepository()
+  const failure = repository.failure('init', '--adr-dir', '../decisions')
+  assert.equal(failure.code, 'invalid-arguments')
+  assert.match(failure.message, /--adr-dir is "\.\.\/decisions"/)
+  assert.equal(repository.git('status', '--porcelain'), '')
+})
+
+test('init refuses to start a second decisions folder beside existing ADRs, and writes nothing', () => {
+  const repository = createEmptyRepository()
+  repository.write('specifications/decisions/0001-use-sqlite.md', legacyAdr({}))
+  repository.write('specifications/decisions/README.md', '# Decisions\n')
+  repository.commit('docs: record a decision')
+
+  const failure = repository.failure('init')
+  assert.equal(failure.code, 'existing-decisions-found')
+  assert.match(failure.message, /already keeps decisions in specifications\/decisions/)
+  assert.match(failure.message, /init --adr-dir specifications\/decisions/, 'how to adopt them')
+  assert.match(failure.message, /init --adr-dir docs\/adr/, 'how to keep them apart')
+  assert.equal(repository.git('status', '--porcelain'), '')
+  assert.throws(() => repository.git('config', '--get', 'core.hooksPath'))
+
+  assert.equal(repository.run('init', '--adr-dir', 'specifications/decisions', '--dry-run').data.directories.adr, 'specifications/decisions')
+  assert.equal(repository.run('init', '--adr-dir', 'docs/adr').data.directories.adr, 'docs/adr', 'naming the default folder keeps the two apart on purpose')
+})
+
+test('init adopts ADRs that are already in the folder it would use', () => {
+  const repository = createEmptyRepository()
+  repository.write('docs/adr/0001-use-sqlite.md', legacyAdr({}))
+  repository.commit('docs: record a decision')
+  assert.equal(repository.run('init').data.directories.adr, 'docs/adr')
+})
+
 test('init leaves an existing hooks path alone and says how to wire the hook in', () => {
   const repository = createEmptyRepository()
   repository.git('config', 'core.hooksPath', '.husky')
@@ -470,26 +578,29 @@ test('this repository matches the templates it gives to others', () => {
   for (const path of ['AGENTS.md', 'templates/AGENTS.md']) assert.ok(readFileSync(join(PACKAGE_ROOT, path), 'utf8').split('\n').length <= 100, `${path} is over 100 lines`)
 })
 
-for (const command of ['init', 'upgrade']) {
-  test(`\`${command}\` with --dry-run reports its changes and writes nothing`, () => {
+for (const setup of [['init'], ['init', ...ELSEWHERE], ['upgrade']]) {
+  const [command] = setup
+  const firstInit = command === 'init' ? setup : ['init']
+
+  test(`\`${setup.join(' ')}\` with --dry-run reports its changes and writes nothing`, () => {
     const repository = createEmptyRepository()
     if (command === 'upgrade') {
       repository.run('init')
       repository.write('scripts/whatwhy.mjs', '// an older version\n')
       repository.commit('chore: adopt whatwhy', '--no-verify')
     }
-    assert.ok(repository.run(command, '--dry-run').changes.length > 0)
+    assert.ok(repository.run(...setup, '--dry-run').changes.length > 0)
     assert.equal(repository.git('status', '--porcelain'), '')
     if (command === 'init') assert.throws(() => repository.git('config', '--get', 'core.hooksPath'))
   })
 
-  test(`\`${command}\` run twice succeeds and changes nothing the second time`, () => {
+  test(`\`${setup.join(' ')}\` run twice succeeds and changes nothing the second time`, () => {
     const repository = createEmptyRepository()
-    repository.run('init')
+    repository.run(...firstInit)
     repository.write('scripts/whatwhy.mjs', '// an older version\n')
-    repository.run(command)
+    repository.run(...setup)
     const snapshot = repository.git('status', '--porcelain')
-    assert.deepEqual(repository.run(command).changes, [])
+    assert.deepEqual(repository.run(...setup).changes, [])
     assert.equal(repository.git('status', '--porcelain'), snapshot)
   })
 }
@@ -616,6 +727,11 @@ function createEmptyRepository(initialBranch = 'main') {
 
 function adr({ id = 'ADR-0001', status = 'accepted', extra = '' }) {
   return `---\nid: ${id}\ntitle: A decision\nstatus: ${status}\ndate: "2026-01-01"\n${extra ? `${extra}\n` : ''}---\n\n## Context\n\nWhy.\n\n## Decision\n\nWe will.\n\n## Consequences\n\nThen.\n`
+}
+
+/** An ADR as repositories wrote them before whatwhy: metadata as lines under the heading, no frontmatter. */
+function legacyAdr({ number = '0001', title = 'Use SQLite', metadata = 'Date: 2026-10-26\nStatus: accepted' }) {
+  return `# ${number}. ${title}\n\n${metadata ? `${metadata}\n\n` : ''}## Context\n\nWhy.\n\n## Options considered\n\n1. One.\n\n## Decision\n\nWe will.\n\n## Consequences\n\nThen.\n\n## Revisit when\n\nIt hurts.\n`
 }
 
 function prd() {

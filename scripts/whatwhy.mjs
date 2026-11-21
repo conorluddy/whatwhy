@@ -8,7 +8,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -31,6 +31,7 @@ Enforce
   index                                  regenerate the indexes
 Setup
   init [--name <name>] [--description <text>]              add the process to this repository
+       [--adr-dir <path>] [--prd-dir <path>]               where documents live, when not docs/adr and docs/prd
   upgrade                                refresh the script, templates and AGENTS.md process section
   doctor                                 report wiring problems
 
@@ -46,7 +47,8 @@ Setup
 /** @typedef {'adr' | 'prd'} DocumentKind */
 /** @typedef {{ frontmatter: Record<string, string>, body: string }} ParsedDocument */
 /** @typedef {ParsedDocument & { kind: DocumentKind, path: string, fileName: string, number: number, id: string }} SpecDocument */
-/** @typedef {{ baseBranch: string, rules: Record<RuleName, Severity>, architecturalPaths: string[] }} Configuration */
+/** @typedef {Record<DocumentKind, string>} Directories where each kind of document lives, relative to the repository root (ADR-0009) */
+/** @typedef {{ baseBranch: string, directories: Directories, rules: Record<RuleName, Severity>, architecturalPaths: string[] }} Configuration */
 /** @typedef {{ base: string | null, changedFiles: string[], text: string }} ChangeSet */
 /** @typedef {{ base?: string, messageFile?: string, pullRequestText?: string }} CheckOptions */
 /** @typedef {{ action: 'create' | 'update' | 'configure', path: string, summary: string }} Change */
@@ -57,13 +59,11 @@ Setup
 
 const DOCUMENT_KINDS = {
   adr: {
-    directory: 'docs/adr',
     prefix: 'ADR',
     statuses: ['proposed', 'accepted', 'rejected', 'superseded', 'deprecated'],
     sections: ['Context', 'Decision', 'Consequences'],
   },
   prd: {
-    directory: 'docs/prd',
     prefix: 'PRD',
     statuses: ['draft', 'approved', 'shipped', 'abandoned'],
     sections: ['Problem', 'Goals', 'Non-goals', 'Requirements', 'Success criteria'],
@@ -73,13 +73,15 @@ const DOCUMENT_KINDS = {
 /** @type {Configuration} */
 const DEFAULT_CONFIGURATION = {
   baseBranch: 'main',
+  directories: { adr: 'docs/adr', prd: 'docs/prd' },
   rules: { structure: 'error', immutability: 'error', traceability: 'warn', architecture: 'warn' },
   architecturalPaths: [],
 }
 
 const DOCUMENT_FILE_NAME = /^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/
-const NON_DOCUMENT_FILE_NAMES = ['INDEX.md', 'TEMPLATE.md']
-const SPEC_REFERENCE = /\b(adr|prd)-(\d{4})\b/gi
+const NON_DOCUMENT_FILE_NAMES = ['INDEX.md', 'TEMPLATE.md', 'README.md']
+const SPEC_REFERENCE = /\b(adr|prd)[- ](\d{4})\b/gi // "ADR-0006" or "ADR 0006"
+const DECISIONS_FOLDER_NAME = /(?:^|[-_])(?:adrs?|decisions?)$/i
 const REFERENCE_KEYS = ['prd', 'supersedes', 'superseded-by']
 const FIXABLE_CODES = ['stale-index', 'id-mismatch', 'supersede-not-reciprocal']
 const RUN = 'node scripts/whatwhy.mjs'
@@ -88,13 +90,14 @@ const MANAGED_END = '<!-- whatwhy:end -->'
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const SCRIPT_PATH = 'scripts/whatwhy.mjs'
+const CONFIGURATION_PATH = 'whatwhy.config.json'
 const HOOKS_PATH = '.githooks'
 
-/** What `init` creates from templates/ when absent. `upgrade` refreshes the entries marked isUpgraded. @type {{ template: string, path: string, isExecutable?: boolean, isUpgraded?: boolean }[]} */
-const SCAFFOLD = [
-  { template: 'adr.md', path: 'docs/adr/TEMPLATE.md', isUpgraded: true },
-  { template: 'prd.md', path: 'docs/prd/TEMPLATE.md', isUpgraded: true },
-  { template: 'config.json', path: 'whatwhy.config.json' },
+/** What `init` creates from templates/ when absent. `upgrade` refreshes the entries marked isUpgraded. @param {Directories} directories @returns {{ template: string, path: string, isExecutable?: boolean, isUpgraded?: boolean }[]} */
+const scaffold = (directories) => [
+  { template: 'adr.md', path: `${directories.adr}/TEMPLATE.md`, isUpgraded: true },
+  { template: 'prd.md', path: `${directories.prd}/TEMPLATE.md`, isUpgraded: true },
+  { template: 'config.json', path: CONFIGURATION_PATH },
   { template: 'commit-msg', path: `${HOOKS_PATH}/commit-msg`, isExecutable: true },
   { template: 'workflow.yml', path: '.github/workflows/whatwhy.yml' },
   { template: 'pull_request_template.md', path: '.github/pull_request_template.md' },
@@ -144,8 +147,8 @@ export function runChecks(repositoryRoot, options = {}) {
     ...checkCrossReferences(documents),
     ...checkIndex(repositoryRoot, 'adr', adr.documents),
     ...checkIndex(repositoryRoot, 'prd', prd.documents),
-    ...checkImmutability(repositoryRoot, changeSet),
-    ...checkTraceability(documents, changeSet),
+    ...checkImmutability(repositoryRoot, configuration, changeSet),
+    ...checkTraceability(documents, configuration, changeSet),
     ...checkArchitecture(configuration, changeSet),
   ]
   return findings
@@ -175,7 +178,7 @@ export function runCommand(repositoryRoot, commandLine, environment = {}) {
 }
 
 /**
- * Regenerates docs/adr/INDEX.md and docs/prd/INDEX.md.
+ * Regenerates the INDEX.md of each document folder.
  * @param {string} repositoryRoot
  * @returns {string[]} the paths that changed
  */
@@ -190,7 +193,7 @@ export function writeIndexes(repositoryRoot) {
 
 /** @type {Record<string, { run: (context: CommandContext) => CommandResult, options: string[] }>} */
 const COMMANDS = {
-  init: { run: runInit, options: ['name', 'description', 'dry-run'] },
+  init: { run: runInit, options: ['name', 'description', 'adr-dir', 'prd-dir', 'dry-run'] },
   upgrade: { run: runUpgrade, options: ['dry-run'] },
   new: { run: runNew, options: ['prd', 'supersedes', 'dry-run'] },
   ...Object.fromEntries(Object.keys(TRANSITIONS).map((name) => [name, { run: runTransition, options: ['dry-run'] }])),
@@ -204,7 +207,7 @@ const COMMANDS = {
 
 /** @param {CommandContext} context @returns {CommandResult} */
 function runInit({ repositoryRoot, positionals, values }) {
-  if (positionals.length > 0) throw new CommandError('invalid-arguments', 'Expected `init [--name <name>] [--description <text>]`. Quote values that contain spaces.')
+  if (positionals.length > 0) throw new CommandError('invalid-arguments', 'Expected `init [--name <name>] [--description <text>] [--adr-dir <path>] [--prd-dir <path>]`. Quote values that contain spaces.')
   if (git(repositoryRoot, ['rev-parse', '--git-dir']) === null) throw new CommandError('not-a-repository', `${repositoryRoot} is not a git repository. Run \`git init\` first.`)
   const isDryRun = Boolean(values['dry-run'])
   const has = (/** @type {string} */ path) => existsSync(join(repositoryRoot, path))
@@ -212,12 +215,13 @@ function runInit({ repositoryRoot, positionals, values }) {
   const pending = new Map()
   /** @type {string[]} */
   const warnings = []
+  const directories = resolveInitDirectories(repositoryRoot, values, warnings)
 
   // Existing files are the repository's own, so only absent ones are written.
   if (!has(SCRIPT_PATH)) pending.set(SCRIPT_PATH, { text: readText(fileURLToPath(import.meta.url)), summary: `whatwhy ${VERSION}`, isExecutable: true })
   const baseBranch = detectBaseBranch(repositoryRoot)
-  for (const { template, path, isExecutable } of SCAFFOLD.filter((entry) => !has(entry.path))) {
-    const text = path === 'whatwhy.config.json' ? `${JSON.stringify({ ...JSON.parse(readTemplate(template)), baseBranch }, null, 2)}\n` : readTemplate(template)
+  for (const { template, path, isExecutable } of scaffold(directories).filter((entry) => !has(entry.path))) {
+    const text = path === CONFIGURATION_PATH ? `${JSON.stringify({ ...JSON.parse(readTemplate(template)), baseBranch, directories }, null, 2)}\n` : readTemplate(template)
     pending.set(path, { text, summary: 'from the whatwhy template', isExecutable })
   }
   if (!has('AGENTS.md')) {
@@ -240,7 +244,31 @@ function runInit({ repositoryRoot, positionals, values }) {
     warnings.push(`git runs hooks from "${hooksPath}", so ${HOOKS_PATH}/commit-msg will not run. Add this line to ${hooksPath}/commit-msg: exec ${RUN} check --message-file "$1"`)
   }
   const lines = changes.length > 0 ? [`whatwhy ${VERSION} is set up. Commit this with "no-spec: adopting whatwhy" and "no-adr: adopting whatwhy" in the message.`, `Then describe the project in AGENTS.md and run \`${RUN} new prd "<title>"\`.`] : ['Already set up. Nothing changed.']
-  return result({ version: VERSION, baseBranch: has('whatwhy.config.json') ? loadConfiguration(repositoryRoot).baseBranch : baseBranch }, lines, changes, warnings)
+  return result({ version: VERSION, baseBranch: has(CONFIGURATION_PATH) ? loadConfiguration(repositoryRoot).baseBranch : baseBranch, directories }, lines, changes, warnings)
+}
+
+/** The folders `init` will use: the config's when there is one, else the flags or the defaults (ADR-0009). @param {string} repositoryRoot @param {CommandContext['values']} values @param {string[]} warnings @returns {Directories} */
+function resolveInitDirectories(repositoryRoot, values, warnings) {
+  const flags = { adr: optionalString(values['adr-dir']), prd: optionalString(values['prd-dir']) }
+  if (existsSync(join(repositoryRoot, CONFIGURATION_PATH))) {
+    if (flags.adr !== undefined || flags.prd !== undefined) warnings.push(`${CONFIGURATION_PATH} already exists, so --adr-dir and --prd-dir were not used. Change \`directories\` there instead.`)
+    return loadConfiguration(repositoryRoot).directories
+  }
+  const directories = validateDirectories({ ...DEFAULT_CONFIGURATION.directories, ...(flags.adr === undefined ? {} : { adr: flags.adr }), ...(flags.prd === undefined ? {} : { prd: flags.prd }) }, (kind) => `--${kind}-dir`, 'invalid-arguments')
+  // Naming the ADR folder is the human's choice made; without it, a second decisions folder would be an accident.
+  const otherFolders = flags.adr === undefined ? findDecisionFolders(repositoryRoot).filter((folder) => folder !== directories.adr) : []
+  if (otherFolders.length > 0) {
+    throw new CommandError('existing-decisions-found', `This repository already keeps decisions in ${otherFolders.join(' and ')}, and \`init\` would start a second set in ${directories.adr}. Nothing was written. To adopt the existing ones, run \`npx whatwhy init --adr-dir ${otherFolders[0]}\`. To keep them apart on purpose, run \`npx whatwhy init --adr-dir ${directories.adr}\`.`)
+  }
+  return directories
+}
+
+/** Folders named like `adr` or `decisions` that hold tracked NNNN-*.md files. @param {string} repositoryRoot @returns {string[]} */
+function findDecisionFolders(repositoryRoot) {
+  const folders = lines(git(repositoryRoot, ['ls-files']))
+    .filter((path) => /^\d{4}-.*\.md$/.test(basename(path)) && DECISIONS_FOLDER_NAME.test(basename(dirname(path))))
+    .map((path) => dirname(path))
+  return [...new Set(folders)].sort()
 }
 
 /** @param {CommandContext} context @returns {CommandResult} */
@@ -252,7 +280,7 @@ function runUpgrade({ repositoryRoot, positionals, values }) {
   const warnings = []
   const template = readTemplate('AGENTS.md')
   pending.set(SCRIPT_PATH, { text: readText(fileURLToPath(import.meta.url)), summary: `whatwhy ${VERSION}`, isExecutable: true })
-  for (const entry of SCAFFOLD.filter(({ isUpgraded }) => isUpgraded)) pending.set(entry.path, { text: readTemplate(entry.template), summary: `whatwhy ${VERSION} template` })
+  for (const entry of scaffold(loadConfiguration(repositoryRoot).directories).filter(({ isUpgraded }) => isUpgraded)) pending.set(entry.path, { text: readTemplate(entry.template), summary: `whatwhy ${VERSION} template` })
 
   const agentsPath = join(repositoryRoot, 'AGENTS.md')
   const existing = existsSync(agentsPath) ? readText(agentsPath) : null
@@ -299,7 +327,8 @@ function runNew({ repositoryRoot, positionals, values }) {
   }
   const kind = /** @type {DocumentKind} */ (kindArgument)
   if (kind === 'prd' && (values.prd || values.supersedes)) throw new CommandError('invalid-arguments', '--prd and --supersedes apply to ADRs only.')
-  const { directory, prefix } = DOCUMENT_KINDS[kind]
+  const { prefix } = DOCUMENT_KINDS[kind]
+  const directory = directoryOf(repositoryRoot, kind)
   const { documents } = loadDocuments(repositoryRoot, kind)
 
   const existing = documents.find((document) => document.fileName.slice(5, -3) === slug)
@@ -448,17 +477,18 @@ function runDoctor({ repositoryRoot }) {
 
   if (Number(process.versions.node.split('.')[0]) < 20) report('node-too-old', `Node ${process.versions.node} is running. Install Node 20 or later.`)
   if (!has(SCRIPT_PATH)) report('script-missing', 'scripts/whatwhy.mjs does not exist, so the hook and the workflow have nothing to run. Run `npx whatwhy init`.')
-  for (const { directory } of Object.values(DOCUMENT_KINDS)) {
+  let configuration = DEFAULT_CONFIGURATION
+  try {
+    configuration = loadConfiguration(repositoryRoot)
+  } catch (error) {
+    report('invalid-configuration', error instanceof Error ? error.message : String(error))
+  }
+  const { baseBranch } = configuration
+  for (const directory of Object.values(configuration.directories)) {
     if (!has(`${directory}/TEMPLATE.md`)) report('template-missing', `${directory}/TEMPLATE.md does not exist, so \`new\` cannot create documents. Run \`npx whatwhy init\`.`)
   }
   if (!has('AGENTS.md') || !findManagedSection(readText(join(repositoryRoot, 'AGENTS.md')))) {
     report('agents-md-unmanaged', `AGENTS.md has no section between \`${MANAGED_BEGIN} -->\` and \`${MANAGED_END}\`, so agents are not told the process and \`upgrade\` cannot refresh it. Run \`npx whatwhy init\`.`)
-  }
-  let baseBranch = DEFAULT_CONFIGURATION.baseBranch
-  try {
-    baseBranch = loadConfiguration(repositoryRoot).baseBranch
-  } catch (error) {
-    report('invalid-configuration', error instanceof Error ? error.message : String(error))
   }
   const workflowDirectory = join(repositoryRoot, '.github/workflows')
   const workflows = existsSync(workflowDirectory) ? readdirSync(workflowDirectory).filter((name) => /\.ya?ml$/.test(name)) : []
@@ -480,7 +510,7 @@ function runDoctor({ repositoryRoot }) {
     const hasCommits = git(repositoryRoot, ['rev-parse', '--verify', 'HEAD']) !== null
     const resolves = (/** @type {string} */ ref) => git(repositoryRoot, ['rev-parse', '--verify', '--quiet', ref]) !== null
     if (hasCommits && !resolves(`origin/${baseBranch}`) && !resolves(baseBranch)) {
-      report('base-branch-not-found', `Base branch "${baseBranch}" does not exist here, so changes cannot be compared with it. Fetch it, or set \`baseBranch\` in whatwhy.config.json.`)
+      report('base-branch-not-found', `Base branch "${baseBranch}" does not exist here, so changes cannot be compared with it. Fetch it, or set \`baseBranch\` in ${CONFIGURATION_PATH}.`)
     }
   }
   const lines = problems.length > 0 ? problems.map(({ code, message }) => `✖ ${code}\n    ${message}`) : [`whatwhy ${VERSION}: no problems found.`]
@@ -509,8 +539,7 @@ function planFixes(repositoryRoot) {
 /** Adds both indexes, as they will read once `pending` is written. @param {string} repositoryRoot @param {PendingWrites} pending */
 function planIndexes(repositoryRoot, pending) {
   for (const kind of /** @type {DocumentKind[]} */ (['adr', 'prd'])) {
-    const { directory, prefix } = DOCUMENT_KINDS[kind]
-    pending.set(`${directory}/INDEX.md`, { text: renderIndex(kind, loadDocuments(repositoryRoot, kind, pending).documents), summary: `${prefix} index` })
+    pending.set(`${directoryOf(repositoryRoot, kind, pending)}/INDEX.md`, { text: renderIndex(kind, loadDocuments(repositoryRoot, kind, pending).documents), summary: `${DOCUMENT_KINDS[kind].prefix} index` })
   }
 }
 
@@ -542,7 +571,7 @@ function findDocument(repositoryRoot, idArgument, kind, command) {
     throw new CommandError('invalid-arguments', `${id} is not ${kind === 'adr' ? 'an ADR' : 'a PRD'}.${command ? ` \`${command}\` applies to ${DOCUMENT_KINDS[kind].prefix}s; for a ${DOCUMENT_KINDS[actualKind].prefix} use ${alternatives}.` : ''}`)
   }
   const document = loadDocuments(repositoryRoot, actualKind).documents.find((candidate) => candidate.id === id)
-  if (!document) throw new CommandError('unknown-document', `${id} does not exist. See ${DOCUMENT_KINDS[actualKind].directory}/INDEX.md, or run \`${RUN} list\`.`)
+  if (!document) throw new CommandError('unknown-document', `${id} does not exist. See ${directoryOf(repositoryRoot, actualKind)}/INDEX.md, or run \`${RUN} list\`.`)
   return document
 }
 
@@ -577,7 +606,8 @@ function result(data, lines, changes = [], warnings = []) {
  * @returns {{ documents: SpecDocument[], findings: Finding[] }}
  */
 function loadDocuments(repositoryRoot, kind, pending = new Map()) {
-  const { directory, prefix } = DOCUMENT_KINDS[kind]
+  const { prefix } = DOCUMENT_KINDS[kind]
+  const directory = directoryOf(repositoryRoot, kind, pending)
   /** @type {SpecDocument[]} */
   const documents = []
   /** @type {Finding[]} */
@@ -672,7 +702,7 @@ function checkCrossReferences(documents) {
 
 /** @param {string} repositoryRoot @param {DocumentKind} kind @param {SpecDocument[]} documents @returns {Finding[]} */
 function checkIndex(repositoryRoot, kind, documents) {
-  const path = `${DOCUMENT_KINDS[kind].directory}/INDEX.md`
+  const path = `${directoryOf(repositoryRoot, kind)}/INDEX.md`
   const absolutePath = join(repositoryRoot, path)
   if (!existsSync(absolutePath) && documents.length === 0) return []
   if (existsSync(absolutePath) && readText(absolutePath) === renderIndex(kind, documents)) return []
@@ -696,14 +726,14 @@ function renderIndex(kind, documents) {
 
 // === IMMUTABILITY RULE ===
 
-/** An ADR that left `proposed` before the base keeps its body; only its status may move on. ADRs added by this change stay editable for review. @param {string} repositoryRoot @param {ChangeSet} changeSet @returns {Finding[]} */
-function checkImmutability(repositoryRoot, changeSet) {
+/** An ADR that left `proposed` before the base keeps its body; only its status may move on. ADRs added by this change stay editable for review. @param {string} repositoryRoot @param {Configuration} configuration @param {ChangeSet} changeSet @returns {Finding[]} */
+function checkImmutability(repositoryRoot, configuration, changeSet) {
   if (!changeSet.base) return []
   /** @type {Finding[]} */
   const findings = []
   const report = (/** @type {string} */ code, /** @type {string} */ file, /** @type {string} */ message) => findings.push({ rule: 'immutability', code, file, message })
 
-  for (const path of changeSet.changedFiles.filter((file) => isSpecDocumentPath(file, 'adr'))) {
+  for (const path of changeSet.changedFiles.filter((file) => isSpecDocumentPath(file, configuration.directories, 'adr'))) {
     const textAtBase = git(repositoryRoot, ['show', `${changeSet.base}:${path}`])
     const before = textAtBase === null ? null : parseDocument(textAtBase)
     if (!before || before.frontmatter.status === 'proposed') continue
@@ -733,16 +763,16 @@ function checkImmutability(repositoryRoot, changeSet) {
 
 // === TRACEABILITY RULE ===
 
-/** @param {SpecDocument[]} documents @param {ChangeSet} changeSet @returns {Finding[]} */
-function checkTraceability(documents, changeSet) {
+/** @param {SpecDocument[]} documents @param {Configuration} configuration @param {ChangeSet} changeSet @returns {Finding[]} */
+function checkTraceability(documents, { directories }, changeSet) {
   if (changeSet.changedFiles.length === 0) return []
   const knownIds = new Set(documents.map((document) => document.id))
   const referencedIds = referencedSpecIds(changeSet.text)
   const unknownIds = referencedIds.filter((id) => !knownIds.has(id))
   if (unknownIds.length > 0) {
-    return [{ rule: 'traceability', code: 'unknown-spec-reference', message: `The branch, commits or pull request mention ${unknownIds.join(', ')}, which does not exist. See docs/adr/INDEX.md and docs/prd/INDEX.md.` }]
+    return [{ rule: 'traceability', code: 'unknown-spec-reference', message: `The branch, commits or pull request mention ${unknownIds.join(', ')}, which does not exist. See ${directories.adr}/INDEX.md and ${directories.prd}/INDEX.md.` }]
   }
-  const isJustified = referencedIds.length > 0 || /\bno-spec:\s*\S/i.test(changeSet.text) || changeSet.changedFiles.some((file) => isSpecDocumentPath(file))
+  const isJustified = referencedIds.length > 0 || /\bno-spec:\s*\S/i.test(changeSet.text) || changeSet.changedFiles.some((file) => isSpecDocumentPath(file, directories))
   if (isJustified) return []
   return [{ rule: 'traceability', code: 'missing-spec-reference', message: 'This change references no PRD or ADR. Mention an ID (e.g. PRD-0001) in the branch name, a commit message or the pull request, or write `no-spec: <reason>`.' }]
 }
@@ -759,7 +789,7 @@ function checkArchitecture(configuration, changeSet) {
   const patterns = configuration.architecturalPaths.map(globToRegExp)
   const architecturalFiles = changeSet.changedFiles.filter((file) => patterns.some((pattern) => pattern.test(file)))
   if (architecturalFiles.length === 0) return []
-  const isJustified = changeSet.changedFiles.some((file) => isSpecDocumentPath(file, 'adr')) || /\bno-adr:\s*\S/i.test(changeSet.text)
+  const isJustified = changeSet.changedFiles.some((file) => isSpecDocumentPath(file, configuration.directories, 'adr')) || /\bno-adr:\s*\S/i.test(changeSet.text)
   if (isJustified) return []
   return [{ rule: 'architecture', code: 'architectural-change-without-adr', message: `Architectural paths changed (${architecturalFiles.join(', ')}) with no ADR in the same change. Add one with \`${RUN} new adr "<title>"\`, or write \`no-adr: <reason>\` in a commit message or the pull request.` }]
 }
@@ -795,22 +825,50 @@ function resolveBase(repositoryRoot, configuration, options) {
 
 // === HELPERS ===
 
-/** @param {string} repositoryRoot @returns {Configuration} */
-function loadConfiguration(repositoryRoot) {
-  const path = join(repositoryRoot, 'whatwhy.config.json')
+/** @param {string} repositoryRoot @param {PendingWrites} [pending] read in place of what is on disk @returns {Configuration} */
+function loadConfiguration(repositoryRoot, pending = new Map()) {
+  const path = join(repositoryRoot, CONFIGURATION_PATH)
   let overrides = {}
   try {
-    if (existsSync(path)) overrides = JSON.parse(readText(path))
+    const text = pending.get(CONFIGURATION_PATH)?.text ?? (existsSync(path) ? readText(path) : null)
+    if (text !== null) overrides = JSON.parse(text)
   } catch (error) {
-    throw new CommandError('invalid-configuration', `whatwhy.config.json is not valid JSON: ${error instanceof Error ? error.message : error}`)
+    throw new CommandError('invalid-configuration', `${CONFIGURATION_PATH} is not valid JSON: ${error instanceof Error ? error.message : error}`)
   }
   const configuration = { ...DEFAULT_CONFIGURATION, ...overrides, rules: { ...DEFAULT_CONFIGURATION.rules, ...overrides.rules } }
   for (const [rule, severity] of Object.entries(configuration.rules)) {
     if (!(rule in DEFAULT_CONFIGURATION.rules) || !['error', 'warn', 'off'].includes(severity)) {
-      throw new CommandError('invalid-configuration', `whatwhy.config.json: rules.${rule} is "${severity}". Expected one of ${Object.keys(DEFAULT_CONFIGURATION.rules).join(', ')} set to error, warn or off.`)
+      throw new CommandError('invalid-configuration', `${CONFIGURATION_PATH}: rules.${rule} is "${severity}". Expected one of ${Object.keys(DEFAULT_CONFIGURATION.rules).join(', ')} set to error, warn or off.`)
     }
   }
-  return configuration
+  const directories = validateDirectories({ ...DEFAULT_CONFIGURATION.directories, ...overrides.directories }, (kind) => `${CONFIGURATION_PATH}: directories.${kind}`, 'invalid-configuration')
+  return { ...configuration, directories }
+}
+
+/** @param {string} repositoryRoot @param {DocumentKind} kind @param {PendingWrites} [pending] */
+function directoryOf(repositoryRoot, kind, pending) {
+  return loadConfiguration(repositoryRoot, pending).directories[kind]
+}
+
+/**
+ * Each folder must be a relative path inside the repository, and the two must differ.
+ * @param {Record<string, unknown>} candidate
+ * @param {(kind: DocumentKind) => string} nameOf how the caller spells each setting, for the message
+ * @param {string} code the CommandError code when one is invalid
+ * @returns {Directories} normalised, with no trailing slash
+ */
+function validateDirectories(candidate, nameOf, code) {
+  const normalise = (/** @type {DocumentKind} */ kind) => {
+    const value = candidate[kind]
+    const normalised = typeof value === 'string' && !isAbsolute(value) && !value.includes('\\') ? posix.normalize(value).replace(/\/$/, '') : '.'
+    if (normalised === '.' || normalised === '..' || normalised.startsWith('../')) {
+      throw new CommandError(code, `${nameOf(kind)} is ${JSON.stringify(value)}. Expected a folder inside the repository, relative to its root, e.g. "${DEFAULT_CONFIGURATION.directories[kind]}".`)
+    }
+    return normalised
+  }
+  const directories = { adr: normalise('adr'), prd: normalise('prd') }
+  if (directories.adr === directories.prd) throw new CommandError(code, `${nameOf('adr')} and ${nameOf('prd')} are both "${directories.adr}". ADRs and PRDs need separate folders.`)
+  return directories
 }
 
 /** Splits a document into flat `key: value` frontmatter and body. Null when there is no valid frontmatter. @param {string} text @returns {ParsedDocument | null} */
@@ -827,10 +885,10 @@ function parseDocument(text) {
   return { frontmatter, body: match[2] }
 }
 
-/** @param {string} path @param {DocumentKind} [kind] any kind when omitted */
-function isSpecDocumentPath(path, kind) {
-  const kinds = kind ? [DOCUMENT_KINDS[kind]] : Object.values(DOCUMENT_KINDS)
-  return kinds.some(({ directory }) => path.startsWith(`${directory}/`) && DOCUMENT_FILE_NAME.test(path.slice(directory.length + 1)))
+/** @param {string} path @param {Directories} directories @param {DocumentKind} [kind] any kind when omitted */
+function isSpecDocumentPath(path, directories, kind) {
+  const candidates = kind ? [directories[kind]] : Object.values(directories)
+  return candidates.some((directory) => path.startsWith(`${directory}/`) && DOCUMENT_FILE_NAME.test(path.slice(directory.length + 1)))
 }
 
 /** Supports `*`, `?` and `**`. A `**` followed by a slash also matches zero directories. @param {string} glob */
@@ -917,6 +975,8 @@ function parseCommandLine(commandLine) {
         version: { type: 'boolean' },
         base: { type: 'string' },
         name: { type: 'string' },
+        'adr-dir': { type: 'string' },
+        'prd-dir': { type: 'string' },
         description: { type: 'string' },
         'message-file': { type: 'string' },
         prd: { type: 'string' },
