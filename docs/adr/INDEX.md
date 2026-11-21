@@ -11,3 +11,5 @@
 | [ADR-0006](0006-the-template-repository-stays-alongside-init.md) | The template repository stays alongside init | accepted | 2026-11-21 |
 | [ADR-0007](0007-comment-markers-bound-the-managed-section-of-agents-md.md) | Comment markers bound the managed section of AGENTS.md | accepted | 2026-11-21 |
 | [ADR-0008](0008-the-cli-stays-one-file-with-scaffolding-in-templates.md) | The CLI stays one file, with scaffolding in a templates directory | accepted | 2026-11-21 |
+| [ADR-0009](0009-document-locations-are-configuration-and-existing-adrs-are-converted-in-place.md) | Document locations are configuration, and existing ADRs are converted in place | accepted | 2026-11-21 |
+| [ADR-0010](0010-the-commit-hook-reports-errors-only.md) | The commit hook reports errors only | accepted | 2026-11-21 |
