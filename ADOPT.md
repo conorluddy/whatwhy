@@ -25,7 +25,7 @@ Get these from the human. Do not invent them.
 | `AGENTS.md` | Rewrite the "This project" section. Delete the notice at the top about `ADOPT.md`. |
 | `README.md` | Replace with your project's README. |
 | `LICENSE` | Replace with your project's licence, or delete it. It covers whatwhy, not your code. |
-| `package.json` | Set `name`, `description` and `version`. Remove `repository`, `license`, `bin`, `files` and the `test` script; keep `setup`. If the project is not a Node project, delete the file. |
+| `package.json` | Set `name`, `description` and `version`. Remove every other field that describes whatwhy (`keywords`, `homepage`, `bugs`, `repository`, `license`, `author`, `bin`, `files`, and the `test` and `prepublishOnly` scripts); keep `setup`. If the project is not a Node project, delete the file. |
 | `templates/`, `scripts/whatwhy.test.mjs`, `.github/workflows/test.yml` | Delete. They belong to the whatwhy package. `npx whatwhy upgrade` brings later versions of the script. |
 | `whatwhy.config.json` | Set `architecturalPaths` for your stack. |
 | `ADOPT.md` | Delete, last. |

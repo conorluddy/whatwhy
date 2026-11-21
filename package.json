@@ -2,8 +2,24 @@
   "name": "whatwhy",
   "version": "0.1.0",
   "description": "PRDs say what, ADRs say why: a process for agentic repositories, enforced by one dependency-free script.",
-  "repository": "github:conorluddy/whatwhy",
+  "keywords": [
+    "adr",
+    "prd",
+    "architecture-decision-records",
+    "product-requirements",
+    "ai-agents",
+    "agents-md",
+    "cli",
+    "git-hooks"
+  ],
+  "homepage": "https://github.com/conorluddy/whatwhy#readme",
+  "bugs": "https://github.com/conorluddy/whatwhy/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/conorluddy/whatwhy.git"
+  },
   "license": "MIT",
+  "author": "Conor Luddy",
   "type": "module",
   "bin": {
     "whatwhy": "scripts/whatwhy.mjs"
@@ -17,6 +33,7 @@
   },
   "scripts": {
     "setup": "node scripts/whatwhy.mjs init",
-    "test": "node --test scripts/whatwhy.test.mjs"
+    "test": "node --test scripts/whatwhy.test.mjs",
+    "prepublishOnly": "npm test && node scripts/whatwhy.mjs check"
   }
 }
