@@ -1,0 +1,5 @@
+#!/bin/sh
+# Checks the commit against the PRD/ADR process. Runs once git is pointed here:
+# `git config core.hooksPath .githooks` (`node scripts/whatwhy.mjs init` does it).
+# commit-msg, not pre-commit, because the traceability rule reads the message.
+exec node "$(git rev-parse --show-toplevel)/scripts/whatwhy.mjs" check --message-file "$1"

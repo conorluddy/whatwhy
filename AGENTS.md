@@ -14,9 +14,11 @@ it.
 
 - Stack: Node 20+, standard library only (ADR-0002).
 - Code: `scripts/whatwhy.mjs`, one file (ADR-0008). Test with `npm test`.
-- Every file is inherited by repositories made from the template. Keep
-  whatwhy-specific wording to this section, `README.md`, `ADOPT.md` and
-  PRD-0001.
+- `templates/` holds what `init` and `upgrade` write into other repositories.
+  A test fails if this repository's own copies drift from it.
+- Every file is inherited by repositories made from the template (ADR-0006).
+  Keep whatwhy-specific wording to this section, `README.md`, `ADOPT.md` and
+  the PRDs.
 
 <!-- whatwhy:begin (managed by `whatwhy upgrade`; edits between the markers are overwritten) -->
 

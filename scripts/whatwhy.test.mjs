@@ -351,6 +351,149 @@ test('doctor reports an invalid config and a base branch that does not exist', (
   assert.ok(repository.run('doctor').data.problems.some((/** @type {{ code: string }} */ problem) => problem.code === 'invalid-configuration'))
 })
 
+// === SETUP ===
+
+test('init in an empty repository, then one commit, leaves a repository that passes the check and the doctor', () => {
+  const repository = createEmptyRepository()
+  const { changes } = repository.run('init', '--name', 'Acme', '--description', 'Invoicing for freelancers.')
+  assert.deepEqual(changes.at(-1), { action: 'configure', path: '.git/config', summary: 'core.hooksPath = .githooks' })
+  assert.match(repository.read('AGENTS.md'), /^\*\*Acme\*\*: Invoicing for freelancers\.$/m)
+  assert.doesNotMatch(repository.read('AGENTS.md'), /\{\{|ADR-\d{4}/, 'no placeholders, and no ADR numbers that this repository does not have')
+  assert.equal(repository.read('scripts/whatwhy.mjs'), readFileSync(SCRIPT_PATH, 'utf8'))
+
+  repository.commit('chore: adopt whatwhy\n\nno-spec: adopting whatwhy\nno-adr: adopting whatwhy') // runs the vendored script through the installed hook
+  assert.deepEqual(repository.run('check').data, { ok: true, findings: [] })
+  assert.deepEqual(repository.run('doctor').data.problems, [])
+  assert.equal(repository.run('new', 'prd', 'First product').data.id, 'PRD-0001')
+})
+
+test('the hook that init installs blocks a commit that breaks the structure rule', () => {
+  const repository = createEmptyRepository()
+  repository.run('init')
+  repository.commit('chore: adopt whatwhy')
+  repository.write('docs/adr/0002-skips-a-number.md', adr({ id: 'ADR-0002' }))
+  assert.throws(() => repository.commit('docs: add an ADR (ADR-0002)'), /numbering-not-contiguous/)
+})
+
+test('init in an existing repository keeps every file that is already there', () => {
+  const repository = createRepository()
+  repository.write('AGENTS.md', '# AGENTS.md\n\nOur own guidance.\n')
+  repository.write('.githooks/commit-msg', '#!/bin/sh\n# ours\n')
+  const configuration = repository.read('whatwhy.config.json')
+  const { changes, warnings } = repository.run('init', '--name', 'Acme')
+  assert.deepEqual(changes.find((change) => change.path === 'AGENTS.md'), { action: 'update', path: 'AGENTS.md', summary: 'process section appended' })
+  assert.match(repository.read('AGENTS.md'), /^# AGENTS\.md\n\nOur own guidance\.\n\n<!-- whatwhy:begin[\s\S]*<!-- whatwhy:end -->\n$/)
+  assert.equal(repository.read('.githooks/commit-msg'), '#!/bin/sh\n# ours\n')
+  assert.equal(repository.read('whatwhy.config.json'), configuration)
+  assert.equal(repository.read(ADR_PATH), adr({}))
+  assert.match(warnings.join(), /--name and --description were not used/)
+  assert.deepEqual(repository.codes('error'), [])
+})
+
+test('init leaves an existing hooks path alone and says how to wire the hook in', () => {
+  const repository = createEmptyRepository()
+  repository.git('config', 'core.hooksPath', '.husky')
+  const { warnings } = repository.run('init')
+  assert.match(warnings.join(), /git runs hooks from "\.husky".*exec node scripts\/whatwhy\.mjs check --message-file/)
+  assert.equal(repository.git('config', '--get', 'core.hooksPath').trim(), '.husky')
+})
+
+test('init takes the base branch from a repository that has not committed yet', () => {
+  const repository = createEmptyRepository('trunk')
+  assert.equal(repository.run('init').data.baseBranch, 'trunk')
+  assert.equal(JSON.parse(repository.read('whatwhy.config.json')).baseBranch, 'trunk')
+})
+
+test('init outside a git repository fails and says what to run', () => {
+  const root = mkdtempSync(join(tmpdir(), 'whatwhy-test-'))
+  test.after(() => rmSync(root, { recursive: true, force: true }))
+  assert.throws(() => runCommand(root, ['init']), (/** @type {CommandError} */ error) => error.code === 'not-a-repository' && /git init/.test(error.message))
+})
+
+test('upgrade refreshes the script, the templates and the managed section, and nothing else', () => {
+  const repository = createEmptyRepository()
+  repository.run('init', '--name', 'Acme')
+  repository.run('new', 'adr', 'Use queues')
+  const agents = repository.read('AGENTS.md')
+  const edited = agents.replace('**Acme**', '**Acme Ltd**').replace('## The check', '## The cheque')
+  repository.write('AGENTS.md', edited)
+  repository.write('scripts/whatwhy.mjs', '// an older version\n')
+  repository.write('docs/adr/TEMPLATE.md', 'an older template\n')
+  repository.write('whatwhy.config.json', '{ "baseBranch": "main", "architecturalPaths": [] }\n')
+  const adrText = repository.read('docs/adr/0001-use-queues.md')
+
+  const { changes } = repository.run('upgrade')
+  assert.deepEqual(changes.map((change) => change.path), ['scripts/whatwhy.mjs', 'docs/adr/TEMPLATE.md', 'AGENTS.md'])
+  assert.equal(repository.read('AGENTS.md'), agents.replace('**Acme**', '**Acme Ltd**'))
+  assert.equal(repository.read('scripts/whatwhy.mjs'), readFileSync(SCRIPT_PATH, 'utf8'))
+  assert.equal(repository.read('docs/adr/0001-use-queues.md'), adrText)
+  assert.equal(repository.read('whatwhy.config.json'), '{ "baseBranch": "main", "architecturalPaths": [] }\n')
+})
+
+test('upgrade leaves an AGENTS.md without markers untouched and says so', () => {
+  const repository = createEmptyRepository()
+  repository.run('init')
+  const withoutMarker = repository.read('AGENTS.md').replace('<!-- whatwhy:end -->\n', '')
+  repository.write('AGENTS.md', withoutMarker)
+  const { changes, warnings } = repository.run('upgrade')
+  assert.deepEqual(changes, [])
+  assert.match(warnings.join(), /process text was not refreshed/)
+  assert.equal(repository.read('AGENTS.md'), withoutMarker)
+  assert.deepEqual(repository.run('doctor').data.problems.map((/** @type {{ code: string }} */ problem) => problem.code), ['agents-md-unmanaged'])
+})
+
+test('a vendored copy runs init again harmlessly, and sends upgrade to the package', () => {
+  const repository = createEmptyRepository()
+  repository.run('init')
+  const vendored = (/** @type {string} */ command) => spawnSync(process.execPath, ['scripts/whatwhy.mjs', command, '--json'], { cwd: repository.root, encoding: 'utf8' })
+  assert.deepEqual(JSON.parse(vendored('init').stdout).changes, [])
+  const upgrade = vendored('upgrade')
+  assert.equal(upgrade.status, 2)
+  assert.equal(JSON.parse(upgrade.stdout).code, 'templates-unavailable')
+})
+
+test('this repository matches the templates it gives to others', () => {
+  for (const [template, path] of Object.entries({
+    'adr.md': 'docs/adr/TEMPLATE.md',
+    'prd.md': 'docs/prd/TEMPLATE.md',
+    'config.json': 'whatwhy.config.json',
+    'commit-msg': '.githooks/commit-msg',
+    'workflow.yml': '.github/workflows/whatwhy.yml',
+    'pull_request_template.md': '.github/pull_request_template.md',
+    'CLAUDE.md': 'CLAUDE.md',
+  })) {
+    assert.equal(readFileSync(join(PACKAGE_ROOT, path), 'utf8'), readFileSync(join(PACKAGE_ROOT, 'templates', template), 'utf8'), `${path} differs from templates/${template}`)
+  }
+  const managed = (/** @type {string} */ path) => /<!-- whatwhy:begin[\s\S]*<!-- whatwhy:end -->/.exec(readFileSync(join(PACKAGE_ROOT, path), 'utf8'))?.[0]
+  assert.ok(managed('AGENTS.md'))
+  assert.equal(managed('AGENTS.md'), managed('templates/AGENTS.md'))
+  for (const path of ['AGENTS.md', 'templates/AGENTS.md']) assert.ok(readFileSync(join(PACKAGE_ROOT, path), 'utf8').split('\n').length <= 100, `${path} is over 100 lines`)
+})
+
+for (const command of ['init', 'upgrade']) {
+  test(`\`${command}\` with --dry-run reports its changes and writes nothing`, () => {
+    const repository = createEmptyRepository()
+    if (command === 'upgrade') {
+      repository.run('init')
+      repository.write('scripts/whatwhy.mjs', '// an older version\n')
+      repository.commit('chore: adopt whatwhy', '--no-verify')
+    }
+    assert.ok(repository.run(command, '--dry-run').changes.length > 0)
+    assert.equal(repository.git('status', '--porcelain'), '')
+    if (command === 'init') assert.throws(() => repository.git('config', '--get', 'core.hooksPath'))
+  })
+
+  test(`\`${command}\` run twice succeeds and changes nothing the second time`, () => {
+    const repository = createEmptyRepository()
+    repository.run('init')
+    repository.write('scripts/whatwhy.mjs', '// an older version\n')
+    repository.run(command)
+    const snapshot = repository.git('status', '--porcelain')
+    assert.deepEqual(repository.run(command).changes, [])
+    assert.equal(repository.git('status', '--porcelain'), snapshot)
+  })
+}
+
 // === EVERY COMMAND ===
 
 const MUTATIONS = [
@@ -420,12 +563,27 @@ test('the script reports the version in package.json', () => {
 
 /** A committed repository on a feature branch with one PRD and one accepted ADR. */
 function createRepository() {
+  const repository = createEmptyRepository()
+  repository.write('whatwhy.config.json', JSON.stringify({ architecturalPaths: ['**/package.json'] }))
+  repository.write(PRD_PATH, prd())
+  repository.write(ADR_PATH, adr({ id: 'ADR-0001' }))
+  for (const kind of ['adr', 'prd']) repository.write(`docs/${kind}/TEMPLATE.md`, readFileSync(join(PACKAGE_ROOT, `docs/${kind}/TEMPLATE.md`), 'utf8'))
+  repository.reindex()
+  repository.commit('chore: initial commit')
+  repository.git('checkout', '-q', '-b', 'feature/work')
+  assert.match(repository.read('docs/adr/INDEX.md'), /ADR-0001/)
+  return repository
+}
+
+/** A git repository with no files and no commits. @param {string} [initialBranch] */
+function createEmptyRepository(initialBranch = 'main') {
   const root = mkdtempSync(join(tmpdir(), 'whatwhy-test-'))
   test.after(() => rmSync(root, { recursive: true, force: true }))
   const git = (/** @type {string[]} */ ...gitArguments) =>
     execFileSync('git', ['-c', 'user.name=whatwhy', '-c', 'user.email=whatwhy@example.invalid', '-c', 'commit.gpgsign=false', ...gitArguments], { cwd: root, encoding: 'utf8', stdio: 'pipe' })
+  git('init', '-q', '-b', initialBranch)
 
-  const repository = {
+  return {
     root,
     git,
     read: (/** @type {string} */ path) => readFileSync(join(root, path), 'utf8'),
@@ -446,25 +604,14 @@ function createRepository() {
       writeFileSync(join(root, path), content)
     },
     reindex: () => writeIndexes(root),
-    commit(/** @type {string} */ message) {
+    commit(/** @type {string} */ message, /** @type {string[]} */ ...flags) {
       git('add', '-A')
-      git('commit', '-q', '-m', message)
+      git('commit', '-q', '-m', message, ...flags)
     },
     check: (/** @type {import('./whatwhy.mjs').CheckOptions} */ options = {}) => runChecks(root, options),
     codes: (/** @type {'error' | 'warn'} */ severity, /** @type {import('./whatwhy.mjs').CheckOptions} */ options = {}) =>
       runChecks(root, options).filter((finding) => finding.severity === severity).map((finding) => finding.code),
   }
-
-  repository.write('whatwhy.config.json', JSON.stringify({ architecturalPaths: ['**/package.json'] }))
-  repository.write(PRD_PATH, prd())
-  repository.write(ADR_PATH, adr({ id: 'ADR-0001' }))
-  for (const kind of ['adr', 'prd']) repository.write(`docs/${kind}/TEMPLATE.md`, readFileSync(join(PACKAGE_ROOT, `docs/${kind}/TEMPLATE.md`), 'utf8'))
-  repository.reindex()
-  git('init', '-q', '-b', 'main')
-  repository.commit('chore: initial commit')
-  git('checkout', '-q', '-b', 'feature/work')
-  assert.match(readFileSync(join(root, 'docs/adr/INDEX.md'), 'utf8'), /ADR-0001/)
-  return repository
 }
 
 function adr({ id = 'ADR-0001', status = 'accepted', extra = '' }) {

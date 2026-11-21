@@ -1,14 +1,21 @@
 {
   "name": "whatwhy",
   "version": "0.1.0",
-  "description": "PRDs say what, ADRs say why: a boilerplate for agentic repositories, with both enforced by one script.",
-  "private": true,
+  "description": "PRDs say what, ADRs say why: a process for agentic repositories, enforced by one dependency-free script.",
+  "repository": "github:conorluddy/whatwhy",
   "type": "module",
+  "bin": {
+    "whatwhy": "scripts/whatwhy.mjs"
+  },
+  "files": [
+    "scripts/whatwhy.mjs",
+    "templates"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "setup": "git config core.hooksPath .githooks",
+    "setup": "node scripts/whatwhy.mjs init",
     "test": "node --test scripts/whatwhy.test.mjs"
   }
 }

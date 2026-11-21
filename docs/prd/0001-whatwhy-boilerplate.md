@@ -29,7 +29,7 @@ unless something stops the commit.
 
 - Judging document quality. A script cannot tell whether a PRD is good.
 - Roadmaps, RFCs, epics, label taxonomies or issue tracking.
-- An installer for retrofitting existing repositories (a later PRD).
+- An installer for retrofitting existing repositories (PRD-0002).
 - Tool-specific adapters such as agent skills (a later PRD).
 
 ## Requirements
@@ -53,7 +53,8 @@ unless something stops the commit.
 10. whatwhy is built with its own process and passes its own checks.
 11. A repository created from the template is told, by `AGENTS.md` and an
     `ADOPT.md` checklist, which files to replace and which to keep. Wording
-    specific to whatwhy is confined to the files that adoption replaces.
+    specific to whatwhy is confined to the files that adoption replaces and
+    to the documents that record the tool itself (PRD-0002 and its ADRs).
 
 ## Success criteria
 
@@ -62,4 +63,4 @@ unless something stops the commit.
 - A repository created from the template needs one command (`npm run setup`)
   before the rules apply to every commit.
 - Following `ADOPT.md` in a fresh copy ends with `node scripts/whatwhy.mjs check`
-  passing and nothing left that describes whatwhy as the product.
+  passing and nothing left that presents whatwhy as the repository's product.

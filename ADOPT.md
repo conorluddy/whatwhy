@@ -1,6 +1,7 @@
 # Adopting the whatwhy template
 
-First-time setup for a repository created from whatwhy. An agent can do this
+First-time setup for a repository created from the whatwhy template. (To add
+whatwhy to a repository that already exists, run `npx whatwhy init` instead.) An agent can do this
 with the human, or a human can do it by hand in about ten minutes. When it is
 done, this file is gone and the repository describes your product instead of
 whatwhy.
@@ -20,10 +21,11 @@ Get these from the human. Do not invent them.
 
 | File | Do |
 | --- | --- |
-| `docs/prd/0001-whatwhy-boilerplate.md` | Delete. Write your product's PRD as `docs/prd/0001-<title>.md` from `docs/prd/TEMPLATE.md`, status `draft` until the human approves it. |
+| `docs/prd/0001-whatwhy-boilerplate.md` | Replace with your product's PRD: keep the number, rename the file to `0001-<title>.md`, and rewrite it from `docs/prd/TEMPLATE.md` with status `draft` until the human approves it. |
 | `AGENTS.md` | Rewrite the "This project" section. Delete the notice at the top about `ADOPT.md`. |
 | `README.md` | Replace with your project's README. |
-| `package.json` | Set `name`, `description` and `version`. Keep the `setup` and `test` scripts. If the project has its own `package.json` conventions, merge them in. |
+| `package.json` | Set `name`, `description` and `version`. Remove `repository`, `bin`, `files` and the `test` script; keep `setup`. If the project is not a Node project, delete the file. |
+| `templates/`, `scripts/whatwhy.test.mjs`, `.github/workflows/test.yml` | Delete. They belong to the whatwhy package. `npx whatwhy upgrade` brings later versions of the script. |
 | `whatwhy.config.json` | Set `architecturalPaths` for your stack. |
 | `ADOPT.md` | Delete, last. |
 
@@ -31,17 +33,18 @@ Get these from the human. Do not invent them.
 
 | File | Why |
 | --- | --- |
-| `docs/adr/0001` to `0004` | They record the process you have inherited. They are frozen; your first decision is ADR-0005. If you disagree with one, supersede it. |
-| `scripts/`, `.githooks/`, `.github/` | The enforcement and its tests. |
+| `docs/adr/0001` to `0008`, `docs/prd/0002-whatwhy-cli.md` | They record the process and the tool you have inherited. The ADRs are frozen; your first decision is ADR-0009. If you disagree with one, supersede it. |
+| `scripts/whatwhy.mjs`, `.githooks/`, the rest of `.github/` | The enforcement. |
 | `docs/*/TEMPLATE.md`, `CLAUDE.md` | Used as they are. |
 | The rest of `AGENTS.md` | The process, written for any project. |
 
 ## 4. Finish
 
 ```sh
-npm run setup                      # enable the git hook in this clone
+node scripts/whatwhy.mjs init      # enable the git hook in this clone
 node scripts/whatwhy.mjs index     # regenerate the indexes for your PRD
 node scripts/whatwhy.mjs check     # expect 0 errors
+node scripts/whatwhy.mjs doctor    # expect no problems
 ```
 
 Commit and open a pull request. The commit touches `package.json` and

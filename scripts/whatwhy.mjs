@@ -8,7 +8,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -30,6 +30,8 @@ Enforce
   check [--fix] [--base <ref>] [--message-file <path>]     apply the rules; --fix repairs what is mechanical
   index                                  regenerate the indexes
 Setup
+  init [--name <name>] [--description <text>]              add the process to this repository
+  upgrade                                refresh the script, templates and AGENTS.md process section
   doctor                                 report wiring problems
 
 --json prints { data, changes[], warnings[] }, or { code, message, retryable } on failure.
@@ -83,6 +85,21 @@ const FIXABLE_CODES = ['stale-index', 'id-mismatch', 'supersede-not-reciprocal']
 const RUN = 'node scripts/whatwhy.mjs'
 const MANAGED_BEGIN = '<!-- whatwhy:begin' // the opening marker continues with a note to readers, so match its start only
 const MANAGED_END = '<!-- whatwhy:end -->'
+
+const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const SCRIPT_PATH = 'scripts/whatwhy.mjs'
+const HOOKS_PATH = '.githooks'
+
+/** What `init` creates from templates/ when absent. `upgrade` refreshes the entries marked isUpgraded. @type {{ template: string, path: string, isExecutable?: boolean, isUpgraded?: boolean }[]} */
+const SCAFFOLD = [
+  { template: 'adr.md', path: 'docs/adr/TEMPLATE.md', isUpgraded: true },
+  { template: 'prd.md', path: 'docs/prd/TEMPLATE.md', isUpgraded: true },
+  { template: 'config.json', path: 'whatwhy.config.json' },
+  { template: 'commit-msg', path: `${HOOKS_PATH}/commit-msg`, isExecutable: true },
+  { template: 'workflow.yml', path: '.github/workflows/whatwhy.yml' },
+  { template: 'pull_request_template.md', path: '.github/pull_request_template.md' },
+  { template: 'CLAUDE.md', path: 'CLAUDE.md' },
+]
 
 /** @type {Record<string, { kind: DocumentKind, from: string[], to: string }>} */
 const TRANSITIONS = {
@@ -173,6 +190,8 @@ export function writeIndexes(repositoryRoot) {
 
 /** @type {Record<string, { run: (context: CommandContext) => CommandResult, options: string[] }>} */
 const COMMANDS = {
+  init: { run: runInit, options: ['name', 'description', 'dry-run'] },
+  upgrade: { run: runUpgrade, options: ['dry-run'] },
   new: { run: runNew, options: ['prd', 'supersedes', 'dry-run'] },
   ...Object.fromEntries(Object.keys(TRANSITIONS).map((name) => [name, { run: runTransition, options: ['dry-run'] }])),
   status: { run: runStatus, options: [] },
@@ -181,6 +200,93 @@ const COMMANDS = {
   check: { run: runCheck, options: ['fix', 'base', 'message-file', 'dry-run'] },
   index: { run: runIndex, options: ['dry-run'] },
   doctor: { run: runDoctor, options: [] },
+}
+
+/** @param {CommandContext} context @returns {CommandResult} */
+function runInit({ repositoryRoot, positionals, values }) {
+  if (positionals.length > 0) throw new CommandError('invalid-arguments', 'Expected `init [--name <name>] [--description <text>]`. Quote values that contain spaces.')
+  if (git(repositoryRoot, ['rev-parse', '--git-dir']) === null) throw new CommandError('not-a-repository', `${repositoryRoot} is not a git repository. Run \`git init\` first.`)
+  const isDryRun = Boolean(values['dry-run'])
+  const has = (/** @type {string} */ path) => existsSync(join(repositoryRoot, path))
+  /** @type {PendingWrites} */
+  const pending = new Map()
+  /** @type {string[]} */
+  const warnings = []
+
+  // Existing files are the repository's own, so only absent ones are written.
+  if (!has(SCRIPT_PATH)) pending.set(SCRIPT_PATH, { text: readText(fileURLToPath(import.meta.url)), summary: `whatwhy ${VERSION}`, isExecutable: true })
+  const baseBranch = detectBaseBranch(repositoryRoot)
+  for (const { template, path, isExecutable } of SCAFFOLD.filter((entry) => !has(entry.path))) {
+    const text = path === 'whatwhy.config.json' ? `${JSON.stringify({ ...JSON.parse(readTemplate(template)), baseBranch }, null, 2)}\n` : readTemplate(template)
+    pending.set(path, { text, summary: 'from the whatwhy template', isExecutable })
+  }
+  if (!has('AGENTS.md')) {
+    const replacements = { name: optionalString(values.name) ?? basename(repositoryRoot), description: optionalString(values.description) ?? '<One sentence: what this is and who it is for.>' }
+    const text = readTemplate('AGENTS.md').replace(/\{\{(name|description)\}\}/g, (_, /** @type {'name' | 'description'} */ key) => replacements[key])
+    pending.set('AGENTS.md', { text, summary: 'project section and process' })
+  } else {
+    if (values.name !== undefined || values.description !== undefined) warnings.push('AGENTS.md already exists, so --name and --description were not used.')
+    const existing = readText(join(repositoryRoot, 'AGENTS.md'))
+    if (!findManagedSection(existing)) pending.set('AGENTS.md', { text: `${existing.trimEnd()}\n\n${managedSectionOf(readTemplate('AGENTS.md'))}\n`, summary: 'process section appended' })
+  }
+  planIndexes(repositoryRoot, pending)
+  const changes = applyWrites(repositoryRoot, pending, isDryRun)
+
+  const hooksPath = git(repositoryRoot, ['config', '--get', 'core.hooksPath'])
+  if (!hooksPath) {
+    changes.push({ action: 'configure', path: '.git/config', summary: `core.hooksPath = ${HOOKS_PATH}` })
+    if (!isDryRun) git(repositoryRoot, ['config', 'core.hooksPath', HOOKS_PATH])
+  } else if (hooksPath !== HOOKS_PATH) {
+    warnings.push(`git runs hooks from "${hooksPath}", so ${HOOKS_PATH}/commit-msg will not run. Add this line to ${hooksPath}/commit-msg: exec ${RUN} check --message-file "$1"`)
+  }
+  const lines = changes.length > 0 ? [`whatwhy ${VERSION} is set up. Commit this with "no-spec: adopting whatwhy" and "no-adr: adopting whatwhy" in the message.`, `Then describe the project in AGENTS.md and run \`${RUN} new prd "<title>"\`.`] : ['Already set up. Nothing changed.']
+  return result({ version: VERSION, baseBranch: has('whatwhy.config.json') ? loadConfiguration(repositoryRoot).baseBranch : baseBranch }, lines, changes, warnings)
+}
+
+/** @param {CommandContext} context @returns {CommandResult} */
+function runUpgrade({ repositoryRoot, positionals, values }) {
+  if (positionals.length > 0) throw new CommandError('invalid-arguments', '`upgrade` takes no arguments.')
+  /** @type {PendingWrites} */
+  const pending = new Map()
+  /** @type {string[]} */
+  const warnings = []
+  const template = readTemplate('AGENTS.md')
+  pending.set(SCRIPT_PATH, { text: readText(fileURLToPath(import.meta.url)), summary: `whatwhy ${VERSION}`, isExecutable: true })
+  for (const entry of SCAFFOLD.filter(({ isUpgraded }) => isUpgraded)) pending.set(entry.path, { text: readTemplate(entry.template), summary: `whatwhy ${VERSION} template` })
+
+  const agentsPath = join(repositoryRoot, 'AGENTS.md')
+  const existing = existsSync(agentsPath) ? readText(agentsPath) : null
+  const section = existing === null ? null : findManagedSection(existing)
+  if (existing !== null && section) {
+    pending.set('AGENTS.md', { text: existing.slice(0, section.start) + managedSectionOf(template) + existing.slice(section.end), summary: 'process section' })
+  } else {
+    warnings.push(`AGENTS.md ${existing === null ? 'does not exist' : `has no \`${MANAGED_BEGIN} -->\` … \`${MANAGED_END}\` section`}, so its process text was not refreshed. Run \`npx whatwhy init\` to add it.`)
+  }
+  planIndexes(repositoryRoot, pending)
+  const changes = applyWrites(repositoryRoot, pending, Boolean(values['dry-run']))
+  return result({ version: VERSION }, [changes.length > 0 ? `Upgraded to whatwhy ${VERSION}.` : `Already at whatwhy ${VERSION}. Nothing changed.`], changes, warnings)
+}
+
+/** A file from the package's templates/ directory, which a vendored copy of the script does not have (docs/adr/0005). @param {string} name */
+function readTemplate(name) {
+  const path = join(PACKAGE_ROOT, 'templates', name)
+  if (!existsSync(path)) throw new CommandError('templates-unavailable', 'This copy of the script was vendored without the files it would write. Run the command from the package instead: `npx whatwhy@latest init` or `npx whatwhy@latest upgrade`.')
+  return readText(path)
+}
+
+/** @param {string} template the AGENTS.md template @returns {string} its managed section, markers included */
+function managedSectionOf(template) {
+  const section = findManagedSection(template)
+  if (!section) throw new Error('templates/AGENTS.md has no managed section.')
+  return template.slice(section.start, section.end)
+}
+
+/** The remote's default branch, else `main` when it exists, else the branch a repository without commits will start on. @param {string} repositoryRoot */
+function detectBaseBranch(repositoryRoot) {
+  const remoteHead = git(repositoryRoot, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
+  if (remoteHead) return remoteHead.replace(/^origin\//, '')
+  const hasCommits = git(repositoryRoot, ['rev-parse', '--verify', 'HEAD']) !== null
+  return (!hasCommits && git(repositoryRoot, ['branch', '--show-current'])) || DEFAULT_CONFIGURATION.baseBranch
 }
 
 /** @param {CommandContext} context @returns {CommandResult} */
@@ -341,7 +447,7 @@ function runDoctor({ repositoryRoot }) {
   const has = (/** @type {string} */ path) => existsSync(join(repositoryRoot, path))
 
   if (Number(process.versions.node.split('.')[0]) < 20) report('node-too-old', `Node ${process.versions.node} is running. Install Node 20 or later.`)
-  if (!has('scripts/whatwhy.mjs')) report('script-missing', 'scripts/whatwhy.mjs does not exist, so the hook and the workflow have nothing to run. Run `npx whatwhy init`.')
+  if (!has(SCRIPT_PATH)) report('script-missing', 'scripts/whatwhy.mjs does not exist, so the hook and the workflow have nothing to run. Run `npx whatwhy init`.')
   for (const { directory } of Object.values(DOCUMENT_KINDS)) {
     if (!has(`${directory}/TEMPLATE.md`)) report('template-missing', `${directory}/TEMPLATE.md does not exist, so \`new\` cannot create documents. Run \`npx whatwhy init\`.`)
   }
@@ -365,8 +471,8 @@ function runDoctor({ repositoryRoot }) {
   } else {
     const hookPath = join(repositoryRoot, git(repositoryRoot, ['rev-parse', '--git-path', 'hooks/commit-msg']) ?? '.git/hooks/commit-msg')
     if (!existsSync(hookPath) || !readText(hookPath).includes('whatwhy')) {
-      report('hook-not-installed', has('.githooks/commit-msg')
-        ? 'git is not using .githooks, so commits are not checked in this clone. Run `git config core.hooksPath .githooks`.'
+      report('hook-not-installed', has(`${HOOKS_PATH}/commit-msg`)
+        ? `git is not using ${HOOKS_PATH}, so commits are not checked in this clone. Run \`${RUN} init\`.`
         : 'There is no commit-msg hook that runs whatwhy, so commits are not checked. Run `npx whatwhy init`.')
     } else if (process.platform !== 'win32' && (statSync(hookPath).mode & 0o111) === 0) {
       report('hook-not-executable', `${hookPath} is not executable, so git skips it. Run \`chmod +x ${hookPath}\`.`)
@@ -810,6 +916,8 @@ function parseCommandLine(commandLine) {
         help: { type: 'boolean' },
         version: { type: 'boolean' },
         base: { type: 'string' },
+        name: { type: 'string' },
+        description: { type: 'string' },
         'message-file': { type: 'string' },
         prd: { type: 'string' },
         supersedes: { type: 'string' },

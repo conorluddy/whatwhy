@@ -1,35 +1,54 @@
 # whatwhy
 
-**PRDs say what, ADRs say why.** A template for repositories that agents work
-in. It sets up a formal product development process (PRDs and ADRs) and
-enforces it with one dependency-free script.
+**PRDs say what, ADRs say why.** A formal product development process for
+repositories that agents work in, enforced by one dependency-free script.
 
 Agents decide as they go, and the reasons vanish with the session. whatwhy
-makes the reasons a precondition of the commit.
+makes the reasons a precondition of the commit, and gives agents one command
+for every step so they never number, index or restatus a document by hand.
 
 ## Use it
 
-1. Create a repository from this template and clone it.
-2. Open it with your coding agent and ask it to adopt the template. It reads
-   `AGENTS.md`, finds [ADOPT.md](ADOPT.md), asks what you are building, and
-   rewrites the files that describe whatwhy (including this README) to describe
-   your product. You can also follow `ADOPT.md` by hand.
+In any git repository, new or existing:
 
-Requires Node 20 or later and git. Nothing to install.
+```sh
+npx whatwhy init --name "Acme" --description "Invoicing for freelancers."
+```
 
-## What your repository inherits
+This copies the script to `scripts/whatwhy.mjs`, adds the process to
+`AGENTS.md`, and sets up the templates, config, commit hook and pull request
+workflow. Files you already have are left alone. From then on the repository
+runs its own copy, offline:
 
-| File | After adoption |
+```sh
+node scripts/whatwhy.mjs status
+```
+
+`npx whatwhy upgrade` brings a repository up to the latest version. Requires
+Node 20 or later and git. Nothing is installed.
+
+Starting from nothing? You can also create a repository from this template,
+which brings the ADRs that explain the process, and follow
+[ADOPT.md](ADOPT.md).
+
+## Commands
+
+| Command | Does |
 | --- | --- |
-| `AGENTS.md` | the process, for any agent; you rewrite one section about your project |
-| `CLAUDE.md` | one line pointing at `AGENTS.md` |
-| `docs/prd/` | product requirements: numbered, templated, indexed; you write PRD-0001 |
-| `docs/adr/` | architecture decisions: numbered, templated, indexed, frozen once merged; starts with the four that define this process |
-| `scripts/whatwhy.mjs` | the enforcement and its tests |
-| `whatwhy.config.json` | rule severities and the paths that count as architectural |
-| `.githooks/commit-msg` | runs the check on every commit |
-| `.github/` | runs the check on every pull request; pull request template |
-| `README.md`, `ADOPT.md` | replaced and deleted |
+| `init`, `upgrade`, `doctor` | set up, refresh, and report what is not wired up |
+| `new adr\|prd "<title>"` | creates the next document: number, frontmatter, index. `--prd <ID>` links an ADR to its PRD; `--supersedes <ID>` also marks the old ADR |
+| `accept\|reject\|deprecate <ADR>` | moves an ADR to a new status |
+| `approve\|ship\|abandon <PRD>` | moves a PRD to a new status |
+| `status` | open PRDs, accepted ADRs, and the specs the current branch references |
+| `list [adr\|prd] [--status <status>]` | the index as data |
+| `show <ID> [--section <name>]` | a document, or one section of it |
+| `check [--fix]` | applies the rules; `--fix` repairs the mechanical findings |
+| `index` | regenerates the indexes |
+
+Built for agents: every command takes `--json` and returns
+`{ data, changes[], warnings[] }`, or `{ code, message, retryable }` on
+failure. Nothing prompts. Commands that write take `--dry-run`, and running
+one twice changes nothing the second time.
 
 ## The rules
 
@@ -49,12 +68,13 @@ The script does not judge whether a document is any good. That stays with you.
 
 ## Why it is built this way
 
-whatwhy is built with its own process, so the reasoning is in its documents:
+whatwhy is built with its own process, so the reasoning is in its documents.
+Run `node scripts/whatwhy.mjs list`, or start with:
 
-- [PRD-0001](docs/prd/0001-whatwhy-boilerplate.md): what whatwhy is and is not
+- [PRD-0001](docs/prd/0001-whatwhy-boilerplate.md) and
+  [PRD-0002](docs/prd/0002-whatwhy-cli.md): what whatwhy is and is not
 - [ADR-0001](docs/adr/0001-prds-and-adrs-are-the-only-required-documents.md): two document types and nothing else
 - [ADR-0002](docs/adr/0002-one-dependency-free-node-script-enforces-the-process.md): one Node script, errors versus warnings
-- [ADR-0003](docs/adr/0003-agents-md-is-the-single-entry-point.md): `AGENTS.md` as the single entry point
-- [ADR-0004](docs/adr/0004-plans-as-a-third-document-type.md): why there is no plans directory (rejected)
+- [ADR-0005](docs/adr/0005-the-npm-package-vendors-its-script-into-the-repository.md): why the script is copied into your repository
 
 To work on whatwhy itself, read [AGENTS.md](AGENTS.md).
