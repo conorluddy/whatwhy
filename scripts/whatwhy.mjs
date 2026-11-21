@@ -247,7 +247,7 @@ function runInit({ repositoryRoot, positionals, values }) {
   } else if (hooksPath !== HOOKS_PATH) {
     warnings.push(`git runs hooks from "${hooksPath}", so ${HOOKS_PATH}/commit-msg will not run. Add this line to ${hooksPath}/commit-msg: exec ${RUN} check --errors-only --message-file "$1"`)
   }
-  const lines = changes.length > 0 ? [`whatwhy ${VERSION} is set up. Commit this with "no-spec: adopting whatwhy" and "no-adr: adopting whatwhy" in the message.`, `Then describe the project in AGENTS.md and run \`${RUN} new prd "<title>"\`.`] : ['Already set up. Nothing changed.']
+  const lines = changes.length > 0 ? [`whatwhy ${VERSION} is set up. Commit this with "no-spec: adopting whatwhy" and "no-adr: adopting whatwhy" in the message.`, `Then describe the project in AGENTS.md and run \`${RUN} new prd "<title>"\`.`, `Want house sections in every new document? Add them to ${directories.adr}/TEMPLATE.md and ${directories.prd}/TEMPLATE.md. \`upgrade\` leaves both alone.`] : ['Already set up. Nothing changed.']
   if (loadDocuments(repositoryRoot, 'adr', pending).findings.some(({ code }) => code === 'invalid-frontmatter')) {
     lines.push(`${directories.adr} holds ADRs written before whatwhy. Run \`${RUN} import\` to convert them.`)
   }

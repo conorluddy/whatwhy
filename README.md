@@ -25,8 +25,8 @@ node scripts/whatwhy.mjs status
 ```
 
 `npx whatwhy upgrade` brings the script and the process section of `AGENTS.md`
-up to the latest version. It leaves each `TEMPLATE.md` alone, so add your own
-sections there. Requires Node 20 or later and git. Nothing is installed.
+up to the latest version. Requires Node 20 or later and git. Nothing is
+installed.
 
 Already keeping ADRs? Point whatwhy at them and convert them where they are:
 
@@ -44,6 +44,21 @@ two sets.
 Starting from nothing? You can also create a repository from this template,
 which brings the ADRs that explain the process, and follow
 [ADOPT.md](ADOPT.md).
+
+## Make it yours
+
+- **House sections.** Add them to the `TEMPLATE.md` in each document folder,
+  and `new` puts them in every document from then on. `upgrade` never
+  overwrites a template. The check requires the standard sections and allows
+  any others.
+- **Folders.** `directories` in `whatwhy.config.json` says where ADRs and PRDs
+  live. Set it with `init --adr-dir <path> --prd-dir <path>`, or move the
+  folders and edit the config.
+- **Other files.** Every `.md` in a document folder must be a numbered
+  document, apart from `INDEX.md`, `TEMPLATE.md` and `README.md`. Keep longer
+  or older documents that do not fit in a different folder.
+- **Severities.** `rules` in the config sets each rule to `error`, `warn` or
+  `off`.
 
 ## Commands
 
