@@ -9,8 +9,6 @@
   },
   "scripts": {
     "setup": "git config core.hooksPath .githooks",
-    "whatwhy:check": "node scripts/whatwhy.mjs",
-    "whatwhy:index": "node scripts/whatwhy.mjs --write-index",
     "test": "node --test scripts/whatwhy.test.mjs"
   }
 }

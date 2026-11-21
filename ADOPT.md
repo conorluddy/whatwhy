@@ -23,7 +23,7 @@ Get these from the human. Do not invent them.
 | `docs/prd/0001-whatwhy-boilerplate.md` | Delete. Write your product's PRD as `docs/prd/0001-<title>.md` from `docs/prd/TEMPLATE.md`, status `draft` until the human approves it. |
 | `AGENTS.md` | Rewrite the "This project" section. Delete the notice at the top about `ADOPT.md`. |
 | `README.md` | Replace with your project's README. |
-| `package.json` | Set `name`, `description` and `version`. Keep the four scripts. If the project has its own `package.json` conventions, merge them in. |
+| `package.json` | Set `name`, `description` and `version`. Keep the `setup` and `test` scripts. If the project has its own `package.json` conventions, merge them in. |
 | `whatwhy.config.json` | Set `architecturalPaths` for your stack. |
 | `ADOPT.md` | Delete, last. |
 
@@ -39,9 +39,9 @@ Get these from the human. Do not invent them.
 ## 4. Finish
 
 ```sh
-npm run setup        # enable the git hook in this clone
-npm run whatwhy:index    # regenerate the indexes for your PRD
-npm run whatwhy:check    # expect 0 errors
+npm run setup                      # enable the git hook in this clone
+node scripts/whatwhy.mjs index     # regenerate the indexes for your PRD
+node scripts/whatwhy.mjs check     # expect 0 errors
 ```
 
 Commit and open a pull request. The commit touches `package.json` and

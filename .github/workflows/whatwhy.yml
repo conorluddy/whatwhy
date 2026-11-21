@@ -19,6 +19,6 @@ jobs:
       - name: Check PRD/ADR process
         env:
           WHATWHY_PR_TEXT: "${{ github.event.pull_request.title }}\n${{ github.event.pull_request.body }}"
-        run: node scripts/whatwhy.mjs --base "origin/$GITHUB_BASE_REF"
+        run: node scripts/whatwhy.mjs check --base "origin/$GITHUB_BASE_REF"
       - name: Test the check script
         run: npm test
