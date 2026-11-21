@@ -1,0 +1,16 @@
+{
+  "name": "whatwhy",
+  "version": "0.1.0",
+  "description": "PRDs say what, ADRs say why: a boilerplate for agentic repositories, with both enforced by one script.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "git config core.hooksPath .githooks",
+    "whatwhy:check": "node scripts/whatwhy.mjs",
+    "whatwhy:index": "node scripts/whatwhy.mjs --write-index",
+    "test": "node --test scripts/whatwhy.test.mjs"
+  }
+}

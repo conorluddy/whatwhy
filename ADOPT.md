@@ -1,0 +1,55 @@
+# Adopting the whatwhy template
+
+First-time setup for a repository created from whatwhy. An agent can do this
+with the human, or a human can do it by hand in about ten minutes. When it is
+done, this file is gone and the repository describes your product instead of
+whatwhy.
+
+Work on a branch (`chore/adopt-whatwhy`), not on `main`.
+
+## 1. Ask before writing
+
+Get these from the human. Do not invent them.
+
+- What is the product, and who is it for?
+- What is in the first version, and what is deliberately out?
+- What is the stack? Which files, when changed, mean an architectural decision
+  (dependency manifests, schemas, migrations, infrastructure, CI)?
+
+## 2. Replace what is specific to whatwhy
+
+| File | Do |
+| --- | --- |
+| `docs/prd/0001-whatwhy-boilerplate.md` | Delete. Write your product's PRD as `docs/prd/0001-<title>.md` from `docs/prd/TEMPLATE.md`, status `draft` until the human approves it. |
+| `AGENTS.md` | Rewrite the "This project" section. Delete the notice at the top about `ADOPT.md`. |
+| `README.md` | Replace with your project's README. |
+| `package.json` | Set `name`, `description` and `version`. Keep the four scripts. If the project has its own `package.json` conventions, merge them in. |
+| `whatwhy.config.json` | Set `architecturalPaths` for your stack. |
+| `ADOPT.md` | Delete, last. |
+
+## 3. Keep what is the process
+
+| File | Why |
+| --- | --- |
+| `docs/adr/0001` to `0004` | They record the process you have inherited. They are frozen; your first decision is ADR-0005. If you disagree with one, supersede it. |
+| `scripts/`, `.githooks/`, `.github/` | The enforcement and its tests. |
+| `docs/*/TEMPLATE.md`, `CLAUDE.md` | Used as they are. |
+| The rest of `AGENTS.md` | The process, written for any project. |
+
+## 4. Finish
+
+```sh
+npm run setup        # enable the git hook in this clone
+npm run whatwhy:index    # regenerate the indexes for your PRD
+npm run whatwhy:check    # expect 0 errors
+```
+
+Commit and open a pull request. The commit touches `package.json` and
+`whatwhy.config.json`, which are architectural paths, so say why no ADR is
+needed:
+
+```
+chore: adopt the whatwhy template (PRD-0001)
+
+no-adr: first-time setup of the template, no new decision
+```
